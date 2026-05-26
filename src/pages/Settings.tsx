@@ -1,0 +1,409 @@
+import React from 'react';
+import { Form, Input, Button, InputNumber, Divider, List, Typography, Popconfirm, Select, message, Anchor } from 'antd';
+import { DeleteOutlined, FolderOpenOutlined, CodeOutlined } from '@ant-design/icons';
+import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
+import { useSettingsStore, SettingsState, defaultSystemPrompt } from '../stores/useSettingsStore';
+
+interface SkillDefinition {
+  name: string;
+  description: string;
+  path: string;
+}
+
+const { Title, Text } = Typography;
+const { TextArea } = Input;
+
+const MODEL_PROVIDER_PRESETS = [
+  { provider: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", interface: "OpenAI-compatible" },
+  { provider: "Zhipu GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4", interface: "OpenAI-compatible" },
+  { provider: "Zhipu GLM en", baseUrl: "https://api.z.ai/v1", interface: "OpenAI-compatible" },
+  { provider: "Bailian", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", interface: "OpenAI-compatible" },
+  { provider: "Kimi", baseUrl: "https://api.moonshot.cn/v1", interface: "OpenAI-compatible" },
+  { provider: "Kimi For Coding", baseUrl: "https://api.kimi.com/coding", interface: "Anthropic-compatible" },
+  { provider: "StepFun", baseUrl: "https://api.stepfun.ai/v1", interface: "OpenAI-compatible" },
+  { provider: "Minimax", baseUrl: "https://api.minimaxi.com/v1", interface: "OpenAI-compatible" },
+  { provider: "Minimax en", baseUrl: "https://platform.minimax.io", interface: "OpenAI-compatible" },
+  { provider: "DouBaoSeed", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", interface: "OpenAI-compatible" },
+  { provider: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/v1", interface: "OpenAI-compatible" },
+  { provider: "ModelScope", baseUrl: "https://api-inference.modelscope.cn/v1", interface: "OpenAI-compatible" },
+  { provider: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", interface: "OpenAI-compatible" },
+  { provider: "Ollama", baseUrl: "http://localhost:11434/v1", interface: "OpenAI-compatible" },
+  { provider: "Custom", baseUrl: "", interface: "OpenAI-compatible" },
+];
+
+const modelInterfaceOptions = [
+  { id: "OpenAI-compatible", label: "OpenAI 兼容" },
+  { id: "Anthropic-compatible", label: "Anthropic 兼容" },
+];
+
+const effortLevelOptions = [
+  { id: "off", label: "关闭" },
+  { id: "low", label: "低" },
+  { id: "medium", label: "中" },
+  { id: "high", label: "高" },
+];
+
+const Settings: React.FC = () => {
+  const store = useSettingsStore();
+  
+  const [modelForm] = Form.useForm();
+  const [promptForm] = Form.useForm();
+  const [libraryForm] = Form.useForm();
+  const [skillForm] = Form.useForm();
+
+  const [skills, setSkills] = React.useState<SkillDefinition[]>([]);
+  const [importingSkill, setImportingSkill] = React.useState(false);
+
+  React.useEffect(() => {
+    invoke<SkillDefinition[]>('get_skills').then(setSkills).catch(console.error);
+  }, []);
+
+  React.useEffect(() => {
+    modelForm.setFieldsValue(store);
+    promptForm.setFieldsValue({ systemPrompt: store.systemPrompt || defaultSystemPrompt });
+  }, [store, modelForm, promptForm]);
+
+  // Handle Model Config Save
+  const handleSaveModelConfig = (values: Partial<SettingsState>) => {
+    store.setLlmConfig(values);
+  };
+
+  // Handle Prompt Save
+  const handleSavePrompt = (values: { systemPrompt: string }) => {
+    store.setSystemPrompt(values.systemPrompt);
+  };
+
+  const handleResetPrompt = () => {
+    promptForm.setFieldsValue({ systemPrompt: defaultSystemPrompt });
+    store.resetSystemPrompt();
+  };
+
+  const handleSelectLibraryPath = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (selected && typeof selected === 'string') {
+        libraryForm.setFieldsValue({ path: selected });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSelectSkillPath = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (selected && typeof selected === 'string') {
+        skillForm.setFieldsValue({ path: selected });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Handle Add Library
+  const handleAddLibrary = (values: { name: string; path: string }) => {
+    store.addReferenceLibrary(values);
+    libraryForm.resetFields();
+    message.success('已添加范文库');
+  };
+
+  const handleImportSkill = async (values: { path: string }) => {
+    try {
+      setImportingSkill(true);
+      const newSkill = await invoke<SkillDefinition>('import_skill', { path: values.path });
+      setSkills(prev => [...prev.filter(s => s.name !== newSkill.name), newSkill]);
+      skillForm.resetFields();
+      message.success(`成功导入 Skill: ${newSkill.name}`);
+    } catch (err: any) {
+      console.error(err);
+      message.error(err.toString());
+    } finally {
+      setImportingSkill(false);
+    }
+  };
+
+  const handleDeleteSkill = async (name: string) => {
+    try {
+      await invoke('delete_skill', { name });
+      setSkills(prev => prev.filter(s => s.name !== name));
+      message.success('已删除 Skill');
+    } catch (err: any) {
+      console.error(err);
+      message.error(err.toString());
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+      <div style={{ width: 180, padding: '40px 0 40px 24px', borderRight: '1px solid #eae6df', overflowY: 'auto', flexShrink: 0 }}>
+        <Anchor
+          affix={false}
+          getContainer={() => document.getElementById('settings-scroll-container') as HTMLElement}
+          onClick={(e) => e.preventDefault()}
+          items={[
+            { key: 'model-config', href: '#model-config', title: '模型配置' },
+            { key: 'system-prompt', href: '#system-prompt', title: '系统提示词' },
+            { key: 'reference-libraries', href: '#reference-libraries', title: '参考资料库' },
+            { key: 'skill-libraries', href: '#skill-libraries', title: '技能库' },
+          ]}
+        />
+      </div>
+      <div id="settings-scroll-container" style={{ flex: 1, padding: '40px 24px', overflowY: 'auto', paddingBottom: 100 }}>
+        <div style={{ maxWidth: 800, margin: '0 auto' }}>
+          
+          {/* 标题 */}
+          <Title level={2} style={{ fontWeight: 600, color: '#33312e', marginBottom: 40 }}>
+            设置
+          </Title>
+
+          {/* 模型配置区域 */}
+          <section id="model-config" style={{ marginBottom: 60 }}>
+          <Title level={4} style={{ color: '#d97757', marginBottom: 24 }}>模型配置</Title>
+          <Form
+            form={modelForm}
+            layout="vertical"
+            initialValues={store}
+            onFinish={handleSaveModelConfig}
+            requiredMark={false}
+          >
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
+              <Form.Item label="模型服务商 (Provider)" name="llmProvider">
+                <Select
+                  onChange={(value) => {
+                    const preset = MODEL_PROVIDER_PRESETS.find((p) => p.provider === value);
+                    if (preset && preset.provider !== "Custom") {
+                      modelForm.setFieldsValue({
+                        llmBaseUrl: preset.baseUrl,
+                        modelInterface: preset.interface,
+                      });
+                    }
+                  }}
+                  options={MODEL_PROVIDER_PRESETS.map((p) => ({ value: p.provider, label: p.provider }))}
+                />
+              </Form.Item>
+              <Form.Item label="接口类型 (Interface Type)" name="modelInterface">
+                <Select
+                  options={modelInterfaceOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
+                />
+              </Form.Item>
+
+              <Form.Item label="模型名称 (Model)" name="llmModel">
+                <Input placeholder="例如: gpt-4o, claude-3-5-sonnet" />
+              </Form.Item>
+              <Form.Item label="接口地址 (Base URL)" name="llmBaseUrl">
+                <Input placeholder="https://api.openai.com/v1" />
+              </Form.Item>
+            </div>
+
+            <Form.Item label="模型 API Key (API Key)" name="llmApiKey">
+              <Input.Password placeholder="sk-..." />
+            </Form.Item>
+
+            <div style={{ 
+              marginTop: 32, 
+              paddingTop: 24, 
+              borderTop: '1px dashed #eae6df',
+              display: 'flex', 
+              justifyContent: 'space-between',
+              gap: '16px' 
+            }}>
+              <Form.Item label="温度 (Temperature)" name="temperature" style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%', maxWidth: 160 }} />
+              </Form.Item>
+              <Form.Item label="最大输出 Token" name="maxOutputTokens" style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                <InputNumber min={1} style={{ width: '100%', maxWidth: 160 }} />
+              </Form.Item>
+              <Form.Item label="最大上下文 Token" name="maxContextTokens" style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                <InputNumber min={1} step={1024} style={{ width: '100%', maxWidth: 160 }} />
+              </Form.Item>
+              <Form.Item label="思考深度 (Depth)" name="thinkingDepth" style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                <Select 
+                  style={{ width: '100%', maxWidth: 160 }}
+                  options={effortLevelOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
+                />
+              </Form.Item>
+            </div>
+
+            <Form.Item style={{ marginTop: 24 }}>
+              <Button type="primary" htmlType="submit" size="large">
+                保存模型配置
+              </Button>
+            </Form.Item>
+          </Form>
+        </section>
+
+        <Divider style={{ borderColor: '#eae6df', margin: '40px 0' }} />
+
+        {/* 系统提示词区域 */}
+        <section id="system-prompt" style={{ marginBottom: 60 }}>
+          <Title level={4} style={{ color: '#d97757', marginBottom: 24 }}>系统提示词 (System Prompt)</Title>
+          <Form
+            form={promptForm}
+            layout="vertical"
+            initialValues={{ systemPrompt: store.systemPrompt || defaultSystemPrompt }}
+            onFinish={handleSavePrompt}
+          >
+            <Form.Item name="systemPrompt" help="此提示词将作为 Agent 初始化时的核心设定。">
+              <TextArea 
+                rows={9} 
+                placeholder="请输入自定义的系统提示词..."
+                style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
+              />
+            </Form.Item>
+            <Form.Item style={{ marginTop: 24 }}>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <Button type="primary" htmlType="submit" size="large">
+                  保存提示词
+                </Button>
+                <Button size="large" onClick={handleResetPrompt}>
+                  恢复默认
+                </Button>
+              </div>
+            </Form.Item>
+          </Form>
+        </section>
+
+        <Divider style={{ borderColor: '#eae6df', margin: '40px 0' }} />
+
+        {/* 范文库配置区域 */}
+        <section id="reference-libraries">
+          <Title level={4} style={{ color: '#d97757', marginBottom: 24 }}>参考资料库 (Reference Libraries)</Title>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>
+            添加本地文件夹路径，以便在对话中快速注入指定的文档资料作为上下文。
+          </Text>
+
+          <Form
+            form={libraryForm}
+            layout="inline"
+            onFinish={handleAddLibrary}
+            style={{ marginBottom: 32 }}
+          >
+            <Form.Item 
+              name="name" 
+              rules={[{ required: true, message: '请输入名称' }]}
+              style={{ flex: '1 1 200px', marginBottom: 16 }}
+            >
+              <Input placeholder="资料库名称 (例: 设定集)" />
+            </Form.Item>
+            <Form.Item 
+              name="path" 
+              rules={[{ required: true, message: '请输入本地路径' }]}
+              style={{ flex: '2 1 300px', marginBottom: 16 }}
+            >
+              <Input 
+                placeholder="点击选择本地文件夹..." 
+                prefix={<FolderOpenOutlined style={{ color: '#bfbfbf' }} />} 
+                onClick={handleSelectLibraryPath}
+                readOnly
+              />
+            </Form.Item>
+            <Form.Item style={{ marginBottom: 16 }}>
+              <Button type="primary" htmlType="submit" ghost>
+                添加
+              </Button>
+            </Form.Item>
+          </Form>
+
+          <List
+            itemLayout="horizontal"
+            dataSource={store.referenceLibraries}
+            locale={{ emptyText: '暂无资料库，请在上方添加' }}
+            renderItem={(item) => (
+              <List.Item
+                actions={[
+                  <Popconfirm
+                    key="delete"
+                    title="确认删除？"
+                    onConfirm={() => store.removeReferenceLibrary(item.id)}
+                    okText="是"
+                    cancelText="否"
+                  >
+                    <Button type="text" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                ]}
+                style={{ borderBottom: '1px solid #eae6df', padding: '16px 0' }}
+              >
+                <List.Item.Meta
+                  title={<span style={{ fontWeight: 500 }}>{item.name}</span>}
+                  description={<Text type="secondary" copyable>{item.path}</Text>}
+                />
+              </List.Item>
+            )}
+          />
+        </section>
+
+        <Divider style={{ borderColor: '#eae6df', margin: '40px 0' }} />
+
+        {/* Skill库配置区域 */}
+        <section id="skill-libraries">
+          <Title level={4} style={{ color: '#d97757', marginBottom: 24 }}>技能库 (Skill Libraries)</Title>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>
+            导入本地包含 SKILL.md 的技能文件夹。导入后会复制到系统应用目录中，并允许 AI 工具调用。
+          </Text>
+
+          <Form
+            form={skillForm}
+            layout="inline"
+            onFinish={handleImportSkill}
+            style={{ marginBottom: 32 }}
+          >
+            <Form.Item 
+              name="path" 
+              rules={[{ required: true, message: '请输入本地技能文件夹路径' }]}
+              style={{ flex: '1 1 300px', marginBottom: 16 }}
+            >
+              <Input 
+                placeholder="点击选择技能文件夹..." 
+                prefix={<CodeOutlined style={{ color: '#bfbfbf' }} />} 
+                onClick={handleSelectSkillPath}
+                readOnly
+              />
+            </Form.Item>
+            <Form.Item style={{ marginBottom: 16 }}>
+              <Button type="primary" htmlType="submit" ghost loading={importingSkill}>
+                导入 Skill
+              </Button>
+            </Form.Item>
+          </Form>
+
+          <List
+            itemLayout="horizontal"
+            dataSource={skills}
+            locale={{ emptyText: '暂无技能，请在上方导入' }}
+            renderItem={(item) => (
+              <List.Item
+                actions={[
+                  <Popconfirm
+                    key="delete"
+                    title="确认删除此技能？"
+                    onConfirm={() => handleDeleteSkill(item.name)}
+                    okText="是"
+                    cancelText="否"
+                  >
+                    <Button type="text" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                ]}
+                style={{ borderBottom: '1px solid #eae6df', padding: '16px 0' }}
+              >
+                <List.Item.Meta
+                  title={<span style={{ fontWeight: 500 }}>{item.name}</span>}
+                  description={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <Text type="secondary">{item.description}</Text>
+                      <Text type="secondary" copyable style={{ fontSize: 12 }}>{item.path}</Text>
+                    </div>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        </section>
+
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Settings;

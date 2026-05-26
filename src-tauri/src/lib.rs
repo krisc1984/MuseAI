@@ -1,0 +1,2881 @@
+use futures_util::{future::BoxFuture, StreamExt};
+use glob::glob;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::io::Read;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::thread;
+use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, SystemTime};
+use tauri::{AppHandle, Emitter, Manager};
+use uuid::Uuid;
+use walkdir::WalkDir;
+
+struct ActiveStreams(Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>);
+
+#[derive(Serialize)]
+pub struct FileNode {
+    name: String,
+    path: String,
+    is_dir: bool,
+    children: Option<Vec<FileNode>>,
+}
+
+#[derive(Serialize)]
+pub struct ToolResult {
+    success: bool,
+    output: String,
+}
+
+#[derive(Serialize)]
+pub struct BashToolResult {
+    success: bool,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct TodoItem {
+    content: String,
+    active_form: String,
+    status: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    role: String,
+    content: String,
+    tool_call_id: Option<String>,
+    tool_calls: Option<Vec<ChatToolCall>>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatReferenceLibrary {
+    id: String,
+    name: String,
+    path: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamRequest {
+    model_interface: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    temperature: Option<f32>,
+    max_output_tokens: Option<u32>,
+    max_context_tokens: Option<u32>,
+    system_prompt: String,
+    workspace_path: Option<String>,
+    messages: Vec<ChatMessage>,
+    reference_libraries: Option<Vec<ChatReferenceLibrary>>,
+    selected_reference_library_ids: Option<Vec<String>>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamEvent {
+    run_id: String,
+    event_type: String,
+    delta: Option<String>,
+    message: Option<String>,
+    tool_call_id: Option<String>,
+    tool_name: Option<String>,
+    tool_status: Option<String>,
+    tool_arguments: Option<String>,
+    todos: Option<Vec<AgentSessionTodo>>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionTool {
+    id: Option<String>,
+    name: String,
+    result: String,
+    status: Option<String>,
+    arguments: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionMessage {
+    id: String,
+    role: String,
+    content: String,
+    thinking: Option<String>,
+    tools: Option<Vec<AgentSessionTool>>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionTodo {
+    content: String,
+    status: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionRecord {
+    id: String,
+    title: String,
+    saved_at: u64,
+    messages: Vec<AgentSessionMessage>,
+    selected_reference_library_ids: Vec<String>,
+    todos: Vec<AgentSessionTodo>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionSummary {
+    id: String,
+    title: String,
+    saved_at: u64,
+}
+
+const MAX_READ_LINES: usize = 2000;
+const MAX_SEARCH_RESULTS: usize = 200;
+const MAX_GLOB_RESULTS: usize = 100;
+const MAX_BASH_OUTPUT_CHARS: usize = 15_000;
+const MAX_AGENT_TOOL_OUTPUT_CHARS: usize = 12_000;
+const MAX_AGENT_TOOL_ROUNDS: usize = 50;
+const MAX_SUBAGENT_TOOL_ROUNDS: usize = 6;
+const MAX_SUBAGENT_OUTPUT_CHARS: usize = 5_000;
+const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
+const MAX_BASH_TIMEOUT_SECS: u64 = 600;
+
+#[tauri::command]
+fn list_dir(path: String) -> Result<Vec<FileNode>, String> {
+    let mut nodes = Vec::new();
+    let dir_path = Path::new(&path);
+
+    if !dir_path.exists() || !dir_path.is_dir() {
+        return Err(format!("Path {} is not a valid directory", path));
+    }
+
+    match fs::read_dir(dir_path) {
+        Ok(entries) => {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path_buf = entry.path();
+                    let name = entry
+                        .file_name()
+                        .into_string()
+                        .unwrap_or_else(|_| String::from("unknown"));
+                    let is_dir = path_buf.is_dir();
+
+                    nodes.push(FileNode {
+                        name,
+                        path: path_buf.to_string_lossy().into_owned(),
+                        is_dir,
+                        children: if is_dir { Some(vec![]) } else { None },
+                    });
+                }
+            }
+            nodes.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+            Ok(nodes)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn read_file(path: String) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_file(path: String, content: String) -> Result<u64, String> {
+    fs::write(&path, content).map_err(|e| e.to_string())?;
+    file_modified_at(path)
+}
+
+#[tauri::command]
+fn file_modified_at(path: String) -> Result<u64, String> {
+    let modified = fs::metadata(path)
+        .map_err(|e| e.to_string())?
+        .modified()
+        .map_err(|e| e.to_string())?;
+
+    let millis = modified
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    u64::try_from(millis).map_err(|_| String::from("File modified timestamp is too large"))
+}
+
+#[tauri::command]
+fn greet(name: &str) -> String {
+    format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn tool_read(file_path: String, offset: Option<usize>, limit: Option<usize>) -> ToolResult {
+    match read_file_with_lines(
+        &file_path,
+        offset.unwrap_or(1),
+        limit.unwrap_or(MAX_READ_LINES),
+    ) {
+        Ok(output) => ToolResult {
+            success: true,
+            output,
+        },
+        Err(output) => ToolResult {
+            success: false,
+            output,
+        },
+    }
+}
+
+#[tauri::command]
+fn tool_write(file_path: String, content: String) -> ToolResult {
+    let path = expand_path(&file_path);
+    let result = (|| -> Result<String, String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        fs::write(&path, &content).map_err(|e| e.to_string())?;
+        let line_count = count_lines(&content);
+        Ok(format!("Wrote {} lines to {}", line_count, path.display()))
+    })();
+
+    result_to_tool_result(result)
+}
+
+#[tauri::command]
+fn tool_edit(file_path: String, old_string: String, new_string: String) -> ToolResult {
+    let path = expand_path(&file_path);
+    let result = (|| -> Result<String, String> {
+        if !path.exists() {
+            return Err(format!("Error: {} not found", path.display()));
+        }
+        if !path.is_file() {
+            return Err(format!("Error: {} is not a file", path.display()));
+        }
+
+        let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let occurrences = content.matches(&old_string).count();
+        if occurrences == 0 {
+            let preview = truncate_chars(&content, 500);
+            return Err(format!(
+                "Error: old_string not found in {}.\nFile starts with:\n{}",
+                path.display(),
+                preview
+            ));
+        }
+        if occurrences > 1 {
+            return Err(format!(
+                "Error: old_string appears {} times in {}. Include more surrounding lines to make it unique.",
+                occurrences,
+                path.display()
+            ));
+        }
+
+        let new_content = content.replacen(&old_string, &new_string, 1);
+        fs::write(&path, &new_content).map_err(|e| e.to_string())?;
+        Ok(format!(
+            "Edited {}\n{}",
+            path.display(),
+            simple_diff(&content, &new_content)
+        ))
+    })();
+
+    result_to_tool_result(result)
+}
+
+#[tauri::command]
+fn tool_bash(command: String, cwd: Option<String>, timeout_secs: Option<u64>) -> BashToolResult {
+    if let Some(reason) = dangerous_command_reason(&command) {
+        return BashToolResult {
+            success: false,
+            stdout: String::new(),
+            stderr: format!(
+                "Blocked: {}\nCommand: {}\nIf intentional, make the command more specific.",
+                reason, command
+            ),
+            exit_code: None,
+            timed_out: false,
+        };
+    }
+
+    let timeout = timeout_secs
+        .unwrap_or(DEFAULT_BASH_TIMEOUT_SECS)
+        .clamp(1, MAX_BASH_TIMEOUT_SECS);
+    let mut child_command = Command::new(shell_path());
+    child_command
+        .arg("-lc")
+        .arg(&command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(cwd) = cwd {
+        child_command.current_dir(expand_path(&cwd));
+    }
+
+    let mut child = match child_command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return BashToolResult {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("Error running command: {}", error),
+                exit_code: None,
+                timed_out: false,
+            }
+        }
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() >= deadline => {
+                timed_out = true;
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                return BashToolResult {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: error.to_string(),
+                    exit_code: None,
+                    timed_out: false,
+                }
+            }
+        }
+    }
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut stream) = child.stdout.take() {
+        let _ = stream.read_to_string(&mut stdout);
+    }
+    if let Some(mut stream) = child.stderr.take() {
+        let _ = stream.read_to_string(&mut stderr);
+    }
+    stdout = truncate_middle(stdout.trim_end().to_string(), MAX_BASH_OUTPUT_CHARS);
+    stderr = truncate_middle(stderr.trim_end().to_string(), MAX_BASH_OUTPUT_CHARS);
+
+    if timed_out {
+        return BashToolResult {
+            success: false,
+            stdout,
+            stderr: format!("{}\nError: timed out after {}s", stderr, timeout)
+                .trim()
+                .to_string(),
+            exit_code: None,
+            timed_out: true,
+        };
+    }
+
+    let status = child.wait().ok();
+    let exit_code = status.and_then(|status| status.code());
+    BashToolResult {
+        success: exit_code == Some(0),
+        stdout,
+        stderr,
+        exit_code,
+        timed_out: false,
+    }
+}
+
+#[tauri::command]
+fn tool_grep(pattern: String, path: Option<String>, include: Option<String>) -> ToolResult {
+    let result = (|| -> Result<String, String> {
+        let regex = Regex::new(&pattern).map_err(|e| format!("Invalid regex: {}", e))?;
+        let base = expand_path(path.as_deref().unwrap_or("."));
+        if !base.exists() {
+            return Err(format!("Error: {} not found", base.display()));
+        }
+
+        let files = collect_grep_files(&base, include.as_deref())?;
+        let mut matches = Vec::new();
+        for file in files {
+            let Ok(text) = fs::read_to_string(&file) else {
+                continue;
+            };
+            for (line_index, line) in text.lines().enumerate() {
+                if regex.is_match(line) {
+                    matches.push(format!("{}:{}: {}", file.display(), line_index + 1, line));
+                    if matches.len() >= MAX_SEARCH_RESULTS {
+                        matches.push(format!("... ({} match limit reached)", MAX_SEARCH_RESULTS));
+                        return Ok(matches.join("\n"));
+                    }
+                }
+            }
+        }
+
+        if matches.is_empty() {
+            Ok(String::from("No matches found."))
+        } else {
+            Ok(matches.join("\n"))
+        }
+    })();
+
+    result_to_tool_result(result)
+}
+
+#[tauri::command]
+fn tool_glob(pattern: String, path: Option<String>) -> ToolResult {
+    let result = (|| -> Result<String, String> {
+        let base = expand_path(path.as_deref().unwrap_or("."));
+        if !base.is_dir() {
+            return Err(format!("Error: {} is not a directory", base.display()));
+        }
+
+        let full_pattern = base.join(&pattern).to_string_lossy().into_owned();
+        let mut hits = Vec::new();
+        for entry in glob(&full_pattern).map_err(|e| e.to_string())? {
+            if let Ok(path) = entry {
+                hits.push(path);
+            }
+        }
+
+        hits.sort_by(|a, b| {
+            let b_time = b.metadata().and_then(|m| m.modified()).ok();
+            let a_time = a.metadata().and_then(|m| m.modified()).ok();
+            b_time.cmp(&a_time)
+        });
+
+        let total = hits.len();
+        let mut lines: Vec<String> = hits
+            .into_iter()
+            .take(MAX_GLOB_RESULTS)
+            .map(|item| item.display().to_string())
+            .collect();
+        if total > MAX_GLOB_RESULTS {
+            lines.push(format!(
+                "... ({} matches, showing first {})",
+                total, MAX_GLOB_RESULTS
+            ));
+        }
+
+        if lines.is_empty() {
+            Ok(String::from("No files matched."))
+        } else {
+            Ok(lines.join("\n"))
+        }
+    })();
+
+    result_to_tool_result(result)
+}
+
+#[tauri::command]
+fn tool_skill(
+    app: AppHandle,
+    skill: String,
+    task: Option<String>,
+    args: Option<String>,
+) -> ToolResult {
+    let result = (|| -> Result<String, String> {
+        let normalized = skill.trim().trim_start_matches('/');
+        if normalized.is_empty() {
+            return Err(String::from("Error: skill is required"));
+        }
+
+        let skills = discover_skills(Some(&app));
+        let Some(selected) = skills.iter().find(|item| {
+            item.name.eq_ignore_ascii_case(normalized)
+                || item
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.eq_ignore_ascii_case(normalized))
+        }) else {
+            let available = if skills.is_empty() {
+                String::from("(none)")
+            } else {
+                skills
+                    .iter()
+                    .map(|item| item.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(format!(
+                "Error: unknown skill \"{}\". Available skills: {}",
+                normalized, available
+            ));
+        };
+
+        let skill_doc = selected.path.join("SKILL.md");
+        let mut skill_body = fs::read_to_string(&skill_doc).map_err(|e| e.to_string())?;
+        skill_body = truncate_chars(&skill_body, 20_000);
+        let task_text = task.or(args).unwrap_or_default();
+
+        let mut lines = vec![
+            format!("Skill \"{}\" selected.", selected.name),
+            format!("Description: {}", selected.description),
+            format!("Path: {}", selected.path.display()),
+        ];
+        let files = list_skill_files(&selected.path);
+        if !files.is_empty() {
+            lines.push(String::from("Related files:"));
+            lines.extend(files.into_iter().map(|file| format!("- {}", file)));
+        }
+        lines.push(String::new());
+        lines.push(String::from("SKILL.md:"));
+        lines.push(skill_body);
+        if !task_text.trim().is_empty() {
+            lines.push(String::new());
+            lines.push(String::from("Apply this skill to the following task:"));
+            lines.push(task_text);
+        }
+        lines.push(String::new());
+        lines.push(String::from(
+            "Follow the skill instructions above before continuing with the task.",
+        ));
+        Ok(lines.join("\n"))
+    })();
+
+    result_to_tool_result(result)
+}
+
+#[tauri::command]
+fn tool_subagent(task: String) -> ToolResult {
+    let output = if task.trim().is_empty() {
+        String::from("Error: task is required")
+    } else {
+        String::from("Error: subagent must be executed from an active Agent chat run so it can reuse the parent model settings.")
+    };
+
+    ToolResult {
+        success: false,
+        output,
+    }
+}
+
+#[tauri::command]
+fn tool_todo(todos: Vec<TodoItem>) -> ToolResult {
+    let mut in_progress_count = 0;
+    for todo in &todos {
+        if todo.content.trim().is_empty() || todo.active_form.trim().is_empty() {
+            return ToolResult {
+                success: false,
+                output: String::from("Error: todo content and active_form are required"),
+            };
+        }
+        match todo.status.as_str() {
+            "pending" | "completed" => {}
+            "in_progress" => in_progress_count += 1,
+            _ => {
+                return ToolResult {
+                    success: false,
+                    output: format!("Error: invalid todo status \"{}\"", todo.status),
+                }
+            }
+        }
+    }
+    if in_progress_count > 1 {
+        return ToolResult {
+            success: false,
+            output: String::from("Error: only one todo may be in_progress"),
+        };
+    }
+
+    let remaining = todos
+        .iter()
+        .filter(|todo| todo.status != "completed")
+        .count();
+    let mut lines = vec![
+        String::from("Todo list updated."),
+        format!(
+            "{} active todo(s), {} completed.",
+            remaining,
+            todos.len() - remaining
+        ),
+    ];
+    lines.extend(
+        todos
+            .iter()
+            .map(|todo| format!("- [{}] {}", todo.status, todo.content)),
+    );
+
+    ToolResult {
+        success: true,
+        output: lines.join("\n"),
+    }
+}
+
+#[tauri::command]
+fn list_agent_sessions(app: AppHandle) -> Result<Vec<AgentSessionSummary>, String> {
+    let dir = agent_sessions_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let mut summaries = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_str::<AgentSessionRecord>(&text) else {
+            continue;
+        };
+        summaries.push(AgentSessionSummary {
+            id: record.id,
+            title: record.title,
+            saved_at: record.saved_at,
+        });
+    }
+
+    summaries.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+    Ok(summaries)
+}
+
+#[tauri::command]
+fn load_agent_session(app: AppHandle, id: String) -> Result<AgentSessionRecord, String> {
+    let path = agent_session_path(&app, &id)?;
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_agent_session(
+    app: AppHandle,
+    mut session: AgentSessionRecord,
+) -> Result<AgentSessionSummary, String> {
+    let dir = agent_sessions_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    session.saved_at = now_millis()?;
+    let path = agent_session_path(&app, &session.id)?;
+    let text = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
+    fs::write(path, text).map_err(|e| e.to_string())?;
+    Ok(AgentSessionSummary {
+        id: session.id,
+        title: session.title,
+        saved_at: session.saved_at,
+    })
+}
+
+#[tauri::command]
+fn start_chat_completion_stream(
+    app: AppHandle,
+    request: ChatStreamRequest,
+    state: tauri::State<'_, ActiveStreams>,
+) -> Result<String, String> {
+    if request.api_key.trim().is_empty() {
+        return Err(String::from("API Key 不能为空"));
+    }
+    if request.model.trim().is_empty() {
+        return Err(String::from("模型名称不能为空"));
+    }
+    if request.base_url.trim().is_empty() {
+        return Err(String::from("接口地址不能为空"));
+    }
+    if request.messages.is_empty() {
+        return Err(String::from("消息不能为空"));
+    }
+
+    let run_id = Uuid::new_v4().to_string();
+    let spawned_run_id = run_id.clone();
+    let state_app = app.clone();
+
+    let handle = tauri::async_runtime::spawn(async move {
+        emit_chat_event(
+            &app,
+            &spawned_run_id,
+            "start",
+            None,
+            Some("开始生成回复".to_string()),
+        );
+
+        let result = match request.model_interface.as_str() {
+            "Anthropic-compatible" => {
+                run_anthropic_agent_loop(&app, &spawned_run_id, &request, AgentRunOptions::parent())
+                    .await
+            }
+            _ => {
+                run_openai_agent_loop(&app, &spawned_run_id, &request, AgentRunOptions::parent())
+                    .await
+            }
+        };
+
+        match result {
+            Ok(_) => emit_chat_event(&app, &spawned_run_id, "done", None, None),
+            Err(error) => emit_chat_event(&app, &spawned_run_id, "error", None, Some(error)),
+        }
+
+        if let Some(active_streams) = state_app.try_state::<ActiveStreams>() {
+            let mut streams = active_streams.0.lock().unwrap();
+            streams.remove(&spawned_run_id);
+        }
+    });
+
+    state.0.lock().unwrap().insert(run_id.clone(), handle);
+
+    Ok(run_id)
+}
+
+#[tauri::command]
+fn stop_chat_stream(run_id: String, state: tauri::State<'_, ActiveStreams>) -> Result<(), String> {
+    if let Some(handle) = state.0.lock().unwrap().remove(&run_id) {
+        handle.abort();
+    }
+    Ok(())
+}
+
+async fn run_openai_agent_loop(
+    app: &AppHandle,
+    run_id: &str,
+    request: &ChatStreamRequest,
+    options: AgentRunOptions,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let endpoint = build_openai_endpoint(&request.base_url);
+    let system_prompt = assemble_system_prompt(Some(app), request)?;
+    let mut messages = openai_history_messages(&system_prompt, &request.messages);
+    let tools = openai_tool_definitions(options.excluded_tools);
+
+    for round in 0..=options.max_tool_rounds {
+        let mut body = json!({
+            "model": request.model,
+            "messages": messages,
+            "stream": true,
+            "temperature": request.temperature.unwrap_or(0.7),
+            "max_tokens": request.max_output_tokens.unwrap_or(4096),
+            "tools": tools,
+            "tool_choice": "auto",
+        });
+        body["stream_options"] = json!({ "include_usage": true });
+
+        let response = client
+            .post(&endpoint)
+            .bearer_auth(&request.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("OpenAI 兼容接口请求失败：{} {}", status, body));
+        }
+
+        let stream_result = stream_openai_round(app, run_id, response, options.emit_events).await?;
+        if stream_result.tool_calls.is_empty() {
+            return Ok(stream_result.content);
+        }
+        if round >= options.max_tool_rounds {
+            return Err(format!(
+                "Agent 工具调用轮次超过上限（{} 轮），已停止继续执行。",
+                options.max_tool_rounds
+            ));
+        }
+
+        let assistant_tool_calls: Vec<Value> = stream_result
+            .tool_calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }
+                })
+            })
+            .collect();
+        messages.push(json!({
+            "role": "assistant",
+            "content": stream_result.content,
+            "tool_calls": assistant_tool_calls,
+        }));
+
+        for call in stream_result.tool_calls {
+            let result = execute_agent_tool(
+                app,
+                run_id,
+                request,
+                options,
+                &call.id,
+                &call.name,
+                &call.arguments,
+            )
+            .await;
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": result.model_output,
+            }));
+        }
+    }
+
+    Err(String::from("Agent 工具循环异常结束"))
+}
+
+async fn stream_openai_round(
+    app: &AppHandle,
+    run_id: &str,
+    response: reqwest::Response,
+    emit_events: bool,
+) -> Result<OpenAiRoundResult, String> {
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut result = OpenAiRoundResult::default();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        process_sse_buffer(&mut buffer, |data| {
+            if data == "[DONE]" {
+                return;
+            }
+            if let Some(event) = parse_openai_stream_event(data) {
+                if let Some(reasoning) = event.reasoning_content {
+                    if emit_events {
+                        emit_chat_event(app, run_id, "thinking_delta", Some(reasoning), None);
+                    }
+                }
+                if let Some(delta) = event.content {
+                    result.content.push_str(&delta);
+                    if emit_events {
+                        emit_chat_event(app, run_id, "delta", Some(delta), None);
+                    }
+                }
+                for chunk in event.tool_call_chunks {
+                    result.apply_tool_call_chunk(chunk);
+                }
+            }
+        });
+    }
+    Ok(result)
+}
+
+async fn run_anthropic_agent_loop(
+    app: &AppHandle,
+    run_id: &str,
+    request: &ChatStreamRequest,
+    options: AgentRunOptions,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let endpoint = build_anthropic_endpoint(&request.base_url);
+    let system_prompt = assemble_system_prompt(Some(app), request)?;
+    let mut messages = anthropic_history_messages(&request.messages);
+    let tools = anthropic_tool_definitions(options.excluded_tools);
+
+    for round in 0..=options.max_tool_rounds {
+        let body = json!({
+            "model": request.model,
+            "messages": messages,
+            "system": system_prompt,
+            "stream": true,
+            "temperature": request.temperature.unwrap_or(0.7),
+            "max_tokens": request.max_output_tokens.unwrap_or(4096),
+            "tools": tools,
+        });
+
+        let response = client
+            .post(&endpoint)
+            .header("x-api-key", &request.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Anthropic 兼容接口请求失败：{} {}", status, body));
+        }
+
+        let stream_result =
+            stream_anthropic_round(app, run_id, response, options.emit_events).await?;
+        if stream_result.tool_calls.is_empty() {
+            return Ok(stream_result.content);
+        }
+        if round >= options.max_tool_rounds {
+            return Err(format!(
+                "Agent 工具调用轮次超过上限（{} 轮），已停止继续执行。",
+                options.max_tool_rounds
+            ));
+        }
+
+        let mut assistant_content = Vec::new();
+        if !stream_result.content.trim().is_empty() {
+            assistant_content.push(json!({ "type": "text", "text": stream_result.content }));
+        }
+        for call in &stream_result.tool_calls {
+            assistant_content.push(json!({
+                "type": "tool_use",
+                "id": call.id,
+                "name": call.name,
+                "input": parse_tool_arguments(&call.arguments),
+            }));
+        }
+        messages.push(json!({
+            "role": "assistant",
+            "content": assistant_content,
+        }));
+
+        let mut tool_results = Vec::new();
+        for call in stream_result.tool_calls {
+            let result = execute_agent_tool(
+                app,
+                run_id,
+                request,
+                options,
+                &call.id,
+                &call.name,
+                &call.arguments,
+            )
+            .await;
+            tool_results.push(json!({
+                "type": "tool_result",
+                "tool_use_id": call.id,
+                "content": result.model_output,
+                "is_error": !result.success,
+            }));
+        }
+        messages.push(json!({
+            "role": "user",
+            "content": tool_results,
+        }));
+    }
+
+    Err(String::from("Agent 工具循环异常结束"))
+}
+
+async fn stream_anthropic_round(
+    app: &AppHandle,
+    run_id: &str,
+    response: reqwest::Response,
+    emit_events: bool,
+) -> Result<AnthropicRoundResult, String> {
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut result = AnthropicRoundResult::default();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        process_sse_buffer(&mut buffer, |data| {
+            if let Some(event) = parse_anthropic_stream_event(data) {
+                match event {
+                    AnthropicStreamEvent::Text(delta) => {
+                        result.content.push_str(&delta);
+                        if emit_events {
+                            emit_chat_event(app, run_id, "delta", Some(delta), None);
+                        }
+                    }
+                    AnthropicStreamEvent::Thinking(delta) => {
+                        if emit_events {
+                            emit_chat_event(app, run_id, "thinking_delta", Some(delta), None);
+                        }
+                    }
+                    AnthropicStreamEvent::ToolStart { index, id, name } => {
+                        result.start_tool_call(index, id, name);
+                    }
+                    AnthropicStreamEvent::ToolInputDelta {
+                        index,
+                        partial_json,
+                    } => {
+                        result.push_tool_arguments(index, &partial_json);
+                    }
+                }
+            }
+        });
+    }
+    Ok(result)
+}
+
+fn emit_chat_event(
+    app: &AppHandle,
+    run_id: &str,
+    event_type: &str,
+    delta: Option<String>,
+    message: Option<String>,
+) {
+    let _ = app.emit(
+        "agent-chat-stream",
+        ChatStreamEvent {
+            run_id: run_id.to_string(),
+            event_type: event_type.to_string(),
+            delta,
+            message,
+            tool_call_id: None,
+            tool_name: None,
+            tool_status: None,
+            tool_arguments: None,
+            todos: None,
+        },
+    );
+}
+
+fn emit_tool_event(
+    app: &AppHandle,
+    run_id: &str,
+    event_type: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    tool_status: Option<&str>,
+    tool_arguments: Option<&str>,
+    message: Option<String>,
+) {
+    let _ = app.emit(
+        "agent-chat-stream",
+        ChatStreamEvent {
+            run_id: run_id.to_string(),
+            event_type: event_type.to_string(),
+            delta: None,
+            message,
+            tool_call_id: Some(tool_call_id.to_string()),
+            tool_name: Some(tool_name.to_string()),
+            tool_status: tool_status.map(String::from),
+            tool_arguments: tool_arguments.map(String::from),
+            todos: None,
+        },
+    );
+}
+
+fn emit_todo_update(app: &AppHandle, run_id: &str, todos: Vec<AgentSessionTodo>) {
+    let _ = app.emit(
+        "agent-chat-stream",
+        ChatStreamEvent {
+            run_id: run_id.to_string(),
+            event_type: String::from("todo_update"),
+            delta: None,
+            message: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_status: None,
+            tool_arguments: None,
+            todos: Some(todos),
+        },
+    );
+}
+
+fn openai_history_messages(system_prompt: &str, history: &[ChatMessage]) -> Vec<Value> {
+    let mut messages = vec![json!({ "role": "system", "content": system_prompt })];
+    for message in history {
+        match message.role.as_str() {
+            "user" => messages.push(json!({
+                "role": "user",
+                "content": message.content,
+            })),
+            "assistant" => {
+                if let Some(tool_calls) = message
+                    .tool_calls
+                    .as_deref()
+                    .filter(|calls| !calls.is_empty())
+                {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": if message.content.trim().is_empty() {
+                            Value::Null
+                        } else {
+                            Value::String(message.content.clone())
+                        },
+                        "tool_calls": tool_calls.iter().map(|call| {
+                            json!({
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": call.arguments,
+                                },
+                            })
+                        }).collect::<Vec<_>>(),
+                    }));
+                } else {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": message.content,
+                    }));
+                }
+            }
+            "tool" => {
+                if let Some(tool_call_id) =
+                    message.tool_call_id.as_deref().filter(|id| !id.is_empty())
+                {
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": message.content,
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    messages
+}
+
+fn anthropic_history_messages(history: &[ChatMessage]) -> Vec<Value> {
+    let mut messages = Vec::new();
+    for message in history {
+        match message.role.as_str() {
+            "user" => messages.push(json!({
+                "role": "user",
+                "content": message.content,
+            })),
+            "assistant" => {
+                if let Some(tool_calls) = message
+                    .tool_calls
+                    .as_deref()
+                    .filter(|calls| !calls.is_empty())
+                {
+                    let mut content = Vec::new();
+                    if !message.content.trim().is_empty() {
+                        content.push(json!({
+                            "type": "text",
+                            "text": message.content,
+                        }));
+                    }
+                    for call in tool_calls {
+                        content.push(json!({
+                            "type": "tool_use",
+                            "id": call.id,
+                            "name": call.name,
+                            "input": parse_tool_arguments(&call.arguments),
+                        }));
+                    }
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": content,
+                    }));
+                } else {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": message.content,
+                    }));
+                }
+            }
+            "tool" => {
+                if let Some(tool_call_id) =
+                    message.tool_call_id.as_deref().filter(|id| !id.is_empty())
+                {
+                    messages.push(json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": tool_call_id,
+                            "content": message.content,
+                        }],
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    messages
+}
+
+#[derive(Clone, Copy)]
+struct AgentRunOptions {
+    max_tool_rounds: usize,
+    emit_events: bool,
+    emit_todo_updates: bool,
+    excluded_tools: &'static [&'static str],
+}
+
+impl AgentRunOptions {
+    fn parent() -> Self {
+        Self {
+            max_tool_rounds: MAX_AGENT_TOOL_ROUNDS,
+            emit_events: true,
+            emit_todo_updates: true,
+            excluded_tools: &[],
+        }
+    }
+
+    fn subagent() -> Self {
+        Self {
+            max_tool_rounds: MAX_SUBAGENT_TOOL_ROUNDS,
+            emit_events: false,
+            emit_todo_updates: false,
+            excluded_tools: &["subagent"],
+        }
+    }
+
+    fn allows_tool(&self, name: &str) -> bool {
+        !self.excluded_tools.contains(&name)
+    }
+}
+
+#[derive(Clone)]
+struct AgentToolDefinition {
+    name: &'static str,
+    description: &'static str,
+    input_schema: Value,
+}
+
+#[derive(Default)]
+struct OpenAiRoundResult {
+    content: String,
+    tool_calls: Vec<AgentToolCall>,
+}
+
+#[derive(Default)]
+struct AnthropicRoundResult {
+    content: String,
+    tool_calls: Vec<AgentToolCall>,
+}
+
+#[derive(Clone, Default)]
+struct AgentToolCall {
+    index: usize,
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+struct AgentToolExecution {
+    success: bool,
+    model_output: String,
+}
+
+struct OpenAiStreamEvent {
+    content: Option<String>,
+    reasoning_content: Option<String>,
+    tool_call_chunks: Vec<OpenAiToolCallChunk>,
+}
+
+struct OpenAiToolCallChunk {
+    index: usize,
+    id: Option<String>,
+    name: Option<String>,
+    arguments: Option<String>,
+}
+
+enum AnthropicStreamEvent {
+    Text(String),
+    Thinking(String),
+    ToolStart {
+        index: usize,
+        id: String,
+        name: String,
+    },
+    ToolInputDelta {
+        index: usize,
+        partial_json: String,
+    },
+}
+
+impl OpenAiRoundResult {
+    fn apply_tool_call_chunk(&mut self, chunk: OpenAiToolCallChunk) {
+        let position = self
+            .tool_calls
+            .iter()
+            .position(|call| call.index == chunk.index)
+            .unwrap_or_else(|| {
+                self.tool_calls.push(AgentToolCall {
+                    index: chunk.index,
+                    ..AgentToolCall::default()
+                });
+                self.tool_calls.len() - 1
+            });
+        let call = &mut self.tool_calls[position];
+        if let Some(id) = chunk.id {
+            call.id = id;
+        }
+        if let Some(name) = chunk.name {
+            call.name = name;
+        }
+        if let Some(arguments) = chunk.arguments {
+            call.arguments.push_str(&arguments);
+        }
+    }
+}
+
+impl AnthropicRoundResult {
+    fn start_tool_call(&mut self, index: usize, id: String, name: String) {
+        if let Some(call) = self.tool_calls.iter_mut().find(|call| call.index == index) {
+            call.id = id;
+            call.name = name;
+            return;
+        }
+        self.tool_calls.push(AgentToolCall {
+            index,
+            id,
+            name,
+            arguments: String::new(),
+        });
+    }
+
+    fn push_tool_arguments(&mut self, index: usize, partial_json: &str) {
+        if let Some(call) = self.tool_calls.iter_mut().find(|call| call.index == index) {
+            call.arguments.push_str(partial_json);
+        }
+    }
+}
+
+fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
+    vec![
+        AgentToolDefinition {
+            name: "read",
+            description: "读取本地文件内容，并按行号返回结果。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "要读取的文件路径。" },
+                    "offset": { "type": "integer", "description": "起始行号，默认 1。" },
+                    "limit": { "type": "integer", "description": "最多读取的行数。" }
+                },
+                "required": ["file_path"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "write",
+            description: "写入完整文件内容，必要时创建父目录。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "要写入的文件路径。" },
+                    "content": { "type": "string", "description": "完整文件内容。" }
+                },
+                "required": ["file_path", "content"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "edit",
+            description: "用精确匹配的旧文本替换为新文本，要求旧文本只出现一次。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "要编辑的文件路径。" },
+                    "old_string": { "type": "string", "description": "文件中唯一出现的旧文本。" },
+                    "new_string": { "type": "string", "description": "替换后的新文本。" }
+                },
+                "required": ["file_path", "old_string", "new_string"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "bash",
+            description: "在本机执行 shell 命令，并返回 stdout、stderr 和退出码。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "要执行的 shell 命令。" },
+                    "cwd": { "type": "string", "description": "命令执行目录，可选。" },
+                    "timeout_secs": { "type": "integer", "description": "超时时间秒数，可选。" }
+                },
+                "required": ["command"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "grep",
+            description: "用正则表达式搜索文件内容。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "正则表达式。" },
+                    "path": { "type": "string", "description": "搜索路径，默认当前目录。" },
+                    "include": { "type": "string", "description": "文件名 glob 过滤，例如 *.md。" }
+                },
+                "required": ["pattern"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "glob",
+            description: "按 glob 模式查找文件。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "glob 模式，例如 **/*.md。" },
+                    "path": { "type": "string", "description": "搜索目录，默认当前目录。" }
+                },
+                "required": ["pattern"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "skill",
+            description: "读取本机已安装 skill 的说明，帮助后续按 skill 指令执行任务。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "skill": { "type": "string", "description": "skill 名称。" },
+                    "task": { "type": "string", "description": "要应用该 skill 的任务，可选。" },
+                    "args": { "type": "string", "description": "兼容参数，可选。" }
+                },
+                "required": ["skill"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "subagent",
+            description: "提交一个子任务给独立子 Agent 执行，并将结果返回当前 Agent。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string", "description": "子任务描述。" }
+                },
+                "required": ["task"]
+            }),
+        },
+        AgentToolDefinition {
+            name: "todo",
+            description: "更新 Agent 的任务清单。最多只能有一个 in_progress 项。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": { "type": "string", "description": "任务内容。" },
+                                "active_form": { "type": "string", "description": "进行中时的动词形式描述。" },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"],
+                                    "description": "任务状态。"
+                                }
+                            },
+                            "required": ["content", "active_form", "status"]
+                        }
+                    }
+                },
+                "required": ["todos"]
+            }),
+        },
+    ]
+}
+
+fn filtered_agent_tool_definitions(excluded_tools: &[&str]) -> Vec<AgentToolDefinition> {
+    agent_tool_definitions()
+        .into_iter()
+        .filter(|tool| !excluded_tools.contains(&tool.name))
+        .collect()
+}
+
+fn openai_tool_definitions(excluded_tools: &[&str]) -> Vec<Value> {
+    filtered_agent_tool_definitions(excluded_tools)
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                }
+            })
+        })
+        .collect()
+}
+
+fn anthropic_tool_definitions(excluded_tools: &[&str]) -> Vec<Value> {
+    filtered_agent_tool_definitions(excluded_tools)
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            })
+        })
+        .collect()
+}
+
+async fn execute_agent_tool(
+    app: &AppHandle,
+    run_id: &str,
+    request: &ChatStreamRequest,
+    options: AgentRunOptions,
+    tool_call_id: &str,
+    tool_name: &str,
+    arguments: &str,
+) -> AgentToolExecution {
+    if options.emit_events {
+        emit_tool_event(
+            app,
+            run_id,
+            "tool_start",
+            tool_call_id,
+            tool_name,
+            Some("running"),
+            Some(arguments),
+            Some(String::from("正在执行工具")),
+        );
+    }
+
+    let parsed = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
+    let execution =
+        match execute_agent_tool_inner(app, run_id, request, options, tool_name, &parsed).await {
+            Ok((output, todos)) => {
+                if options.emit_todo_updates {
+                    if let Some(todos) = todos {
+                        emit_todo_update(app, run_id, todos);
+                    }
+                }
+                AgentToolExecution {
+                    success: true,
+                    model_output: normalize_agent_tool_output(true, &output),
+                }
+            }
+            Err(output) => AgentToolExecution {
+                success: false,
+                model_output: normalize_agent_tool_output(false, &output),
+            },
+        };
+
+    if options.emit_events {
+        emit_tool_event(
+            app,
+            run_id,
+            "tool_output",
+            tool_call_id,
+            tool_name,
+            Some(if execution.success {
+                "success"
+            } else {
+                "error"
+            }),
+            None,
+            Some(execution.model_output.clone()),
+        );
+        emit_tool_event(
+            app,
+            run_id,
+            "tool_end",
+            tool_call_id,
+            tool_name,
+            Some(if execution.success {
+                "success"
+            } else {
+                "error"
+            }),
+            None,
+            Some(execution.model_output.clone()),
+        );
+    }
+    execution
+}
+
+async fn execute_agent_tool_inner(
+    app: &AppHandle,
+    run_id: &str,
+    request: &ChatStreamRequest,
+    options: AgentRunOptions,
+    tool_name: &str,
+    input: &Value,
+) -> Result<(String, Option<Vec<AgentSessionTodo>>), String> {
+    if !options.allows_tool(tool_name) {
+        return Err(format!(
+            "Error: tool \"{}\" is not available in this Agent run",
+            tool_name
+        ));
+    }
+
+    match tool_name {
+        "read" => {
+            let result = tool_read(
+                required_string(input, "file_path")?,
+                optional_usize(input, "offset"),
+                optional_usize(input, "limit"),
+            );
+            result_to_agent_execution(result).map(|output| (output, None))
+        }
+        "write" => {
+            let result = tool_write(
+                required_string(input, "file_path")?,
+                required_string(input, "content")?,
+            );
+            result_to_agent_execution(result).map(|output| (output, None))
+        }
+        "edit" => {
+            let result = tool_edit(
+                required_string(input, "file_path")?,
+                required_string(input, "old_string")?,
+                required_string(input, "new_string")?,
+            );
+            result_to_agent_execution(result).map(|output| (output, None))
+        }
+        "bash" => {
+            let result = tool_bash(
+                required_string(input, "command")?,
+                optional_string(input, "cwd"),
+                optional_u64(input, "timeout_secs"),
+            );
+            bash_result_to_agent_execution(result).map(|output| (output, None))
+        }
+        "grep" => {
+            let result = tool_grep(
+                required_string(input, "pattern")?,
+                optional_string(input, "path"),
+                optional_string(input, "include"),
+            );
+            result_to_agent_execution(result).map(|output| (output, None))
+        }
+        "glob" => {
+            let result = tool_glob(
+                required_string(input, "pattern")?,
+                optional_string(input, "path"),
+            );
+            result_to_agent_execution(result).map(|output| (output, None))
+        }
+        "skill" => {
+            let result = tool_skill(
+                app.clone(),
+                required_string(input, "skill")?,
+                optional_string(input, "task"),
+                optional_string(input, "args"),
+            );
+            result_to_agent_execution(result).map(|output| (output, None))
+        }
+        "subagent" => {
+            let task = required_string(input, "task")?;
+            let output = run_subagent_agent_loop(app, run_id, request, task).await?;
+            Ok((output, None))
+        }
+        "todo" => {
+            let todos = parse_todos(input)?;
+            let result = tool_todo(todos.clone());
+            result_to_agent_execution(result).map(|output| {
+                let ui_todos = todos
+                    .into_iter()
+                    .map(|todo| AgentSessionTodo {
+                        content: todo.content,
+                        status: todo.status,
+                    })
+                    .collect();
+                (output, Some(ui_todos))
+            })
+        }
+        _ => Err(format!("Error: unknown tool \"{}\"", tool_name)),
+    }
+}
+
+fn run_subagent_agent_loop<'a>(
+    app: &'a AppHandle,
+    run_id: &'a str,
+    parent_request: &'a ChatStreamRequest,
+    task: String,
+) -> BoxFuture<'a, Result<String, String>> {
+    Box::pin(async move {
+        let mut child_request = parent_request.clone();
+        child_request.system_prompt = append_subagent_system_prompt(&child_request.system_prompt);
+        child_request.messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: task,
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let result = match child_request.model_interface.as_str() {
+            "Anthropic-compatible" => {
+                run_anthropic_agent_loop(app, run_id, &child_request, AgentRunOptions::subagent())
+                    .await
+            }
+            _ => {
+                run_openai_agent_loop(app, run_id, &child_request, AgentRunOptions::subagent())
+                    .await
+            }
+        };
+
+        match result {
+            Ok(output) => Ok(format_subagent_success_output(&output)),
+            Err(error) => Err(format_subagent_error_output(&error)),
+        }
+    })
+}
+
+fn format_subagent_success_output(output: &str) -> String {
+    let output = if output.trim().is_empty() {
+        String::from("（子 Agent 未返回内容）")
+    } else {
+        output.to_string()
+    };
+    format!(
+        "[Sub-agent completed]\n{}",
+        truncate_chars(&output, MAX_SUBAGENT_OUTPUT_CHARS)
+    )
+}
+
+fn format_subagent_error_output(error: &str) -> String {
+    format!("Sub-agent error: {}", error)
+}
+
+fn append_subagent_system_prompt(system_prompt: &str) -> String {
+    let mut prompt = system_prompt.trim().to_string();
+    if !prompt.is_empty() {
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str(
+        "## 子 Agent 模式\n你正在作为一个独立的子 Agent 执行父 Agent 交给你的子任务。请只围绕子任务工作，必要时使用可用工具，并在完成后返回清晰、简洁的结果。你不能再调用 subagent。",
+    );
+    prompt
+}
+
+fn result_to_agent_execution(result: ToolResult) -> Result<String, String> {
+    if result.success {
+        Ok(result.output)
+    } else {
+        Err(result.output)
+    }
+}
+
+fn bash_result_to_agent_execution(result: BashToolResult) -> Result<String, String> {
+    let output = format!(
+        "exit_code: {}\ntimed_out: {}\nstdout:\n{}\nstderr:\n{}",
+        result
+            .exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| String::from("none")),
+        result.timed_out,
+        result.stdout,
+        result.stderr
+    );
+    if result.success {
+        Ok(output)
+    } else {
+        Err(output)
+    }
+}
+
+fn normalize_agent_tool_output(success: bool, output: &str) -> String {
+    let status = if success { "success" } else { "error" };
+    let normalized = truncate_chars(output, MAX_AGENT_TOOL_OUTPUT_CHARS);
+    format!("status: {}\n{}", status, normalized)
+}
+
+fn parse_tool_arguments(arguments: &str) -> Value {
+    serde_json::from_str(arguments).unwrap_or_else(|_| json!({}))
+}
+
+fn required_string(input: &Value, key: &str) -> Result<String, String> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(String::from)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("Error: {} is required", key))
+}
+
+fn optional_string(input: &Value, key: &str) -> Option<String> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(String::from)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn optional_usize(input: &Value, key: &str) -> Option<usize> {
+    input
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+fn optional_u64(input: &Value, key: &str) -> Option<u64> {
+    input.get(key).and_then(Value::as_u64)
+}
+
+fn parse_todos(input: &Value) -> Result<Vec<TodoItem>, String> {
+    let todos = input
+        .get("todos")
+        .cloned()
+        .ok_or_else(|| String::from("Error: todos is required"))?;
+    serde_json::from_value(todos).map_err(|error| format!("Error: invalid todos: {}", error))
+}
+
+fn parse_openai_stream_event(data: &str) -> Option<OpenAiStreamEvent> {
+    let value: Value = serde_json::from_str(data).ok()?;
+    let choice = value.get("choices")?.get(0)?;
+    let delta = choice.get("delta")?;
+    let content = delta
+        .get("content")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let reasoning_content = delta
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let mut tool_call_chunks = Vec::new();
+    if let Some(chunks) = delta.get("tool_calls").and_then(Value::as_array) {
+        for chunk in chunks {
+            let index = chunk.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let function = chunk.get("function").unwrap_or(&Value::Null);
+            tool_call_chunks.push(OpenAiToolCallChunk {
+                index,
+                id: chunk.get("id").and_then(Value::as_str).map(String::from),
+                name: function
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                arguments: function
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+            });
+        }
+    }
+    Some(OpenAiStreamEvent {
+        content,
+        reasoning_content,
+        tool_call_chunks,
+    })
+}
+
+fn parse_anthropic_stream_event(data: &str) -> Option<AnthropicStreamEvent> {
+    let value: Value = serde_json::from_str(data).ok()?;
+    match value.get("type")?.as_str()? {
+        "content_block_start" => {
+            let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let block = value.get("content_block")?;
+            if block.get("type")?.as_str()? != "tool_use" {
+                return None;
+            }
+            Some(AnthropicStreamEvent::ToolStart {
+                index,
+                id: block.get("id")?.as_str()?.to_string(),
+                name: block.get("name")?.as_str()?.to_string(),
+            })
+        }
+        "content_block_delta" => {
+            let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let delta = value.get("delta")?;
+            match delta.get("type").and_then(Value::as_str) {
+                Some("text_delta") => delta
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(|text| AnthropicStreamEvent::Text(text.to_string())),
+                Some("thinking_delta") => delta
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .map(|thinking| AnthropicStreamEvent::Thinking(thinking.to_string())),
+                Some("input_json_delta") => {
+                    delta
+                        .get("partial_json")
+                        .and_then(Value::as_str)
+                        .map(|partial_json| AnthropicStreamEvent::ToolInputDelta {
+                            index,
+                            partial_json: partial_json.to_string(),
+                        })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn assemble_system_prompt(
+    app: Option<&AppHandle>,
+    request: &ChatStreamRequest,
+) -> Result<String, String> {
+    let mut prompt = request.system_prompt.trim().to_string();
+    let workspace_context = build_workspace_context(request);
+
+    if !workspace_context.is_empty() {
+        if !prompt.is_empty() {
+            prompt.push_str("\n\n");
+        }
+        prompt.push_str(&workspace_context);
+    }
+
+    let sys_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    prompt.push_str(&format!(
+        "\n\n## 系统信息\n- **当前时间戳**：{}\n- **操作系统**：{}\n- **Python 环境**：{}\n- **可用 Skills**：\n",
+        sys_time,
+        std::env::consts::OS,
+        get_python_info()
+    ));
+
+    let skills = discover_skills(app);
+    if skills.is_empty() {
+        prompt.push_str("  （无可用 skill）\n");
+    } else {
+        for skill in skills {
+            prompt.push_str(&format!("  - `{}`: {}\n", skill.name, skill.description));
+        }
+    }
+
+    Ok(prompt)
+}
+
+fn build_workspace_context(request: &ChatStreamRequest) -> String {
+    let mut lines = Vec::new();
+    lines.push(String::from("## 当前环境"));
+    if let Some(path) = request
+        .workspace_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+    {
+        lines.push(format!("当前工作空间路径：{}", path.trim()));
+    } else {
+        lines.push(String::from("当前工作空间路径：未选择"));
+    }
+
+    let all_libraries = request.reference_libraries.as_deref().unwrap_or(&[]);
+    let selected_ids = request
+        .selected_reference_library_ids
+        .as_deref()
+        .unwrap_or(&[]);
+
+    let selected_libraries: Vec<_> = all_libraries
+        .iter()
+        .filter(|lib| selected_ids.contains(&lib.id))
+        .collect();
+
+    if selected_libraries.is_empty() {
+        lines.push(String::from("当前选中的范文库：无"));
+    } else {
+        lines.push(String::from("当前选中的范文库："));
+        for library in selected_libraries {
+            lines.push(format!("- {}：{}", library.name, library.path));
+        }
+        lines.push(String::new());
+        lines.push(String::from("【重要指令】用户已选择上述范文库。在首轮对话中，你必须首先使用工具（如 list_dir, read, glob 等）主动读取并吸收这些范文库中的文章内容，然后再正式回答用户的问题。"));
+    }
+
+    lines.join("\n")
+}
+
+fn build_openai_endpoint(base_url: &str) -> String {
+    build_endpoint(base_url, "v1/chat/completions", "chat/completions")
+}
+
+fn build_anthropic_endpoint(base_url: &str) -> String {
+    build_endpoint(base_url, "v1/messages", "messages")
+}
+
+fn build_endpoint(base_url: &str, default_path: &str, terminal_path: &str) -> String {
+    let trimmed_base = base_url.trim().trim_end_matches('/');
+    if trimmed_base.ends_with(terminal_path) {
+        return trimmed_base.to_string();
+    }
+    if trimmed_base.ends_with("/v1") {
+        return format!("{}/{}", trimmed_base, terminal_path);
+    }
+    format!("{}/{}", trimmed_base, default_path)
+}
+
+fn process_sse_buffer(buffer: &mut String, mut handle_data: impl FnMut(&str)) {
+    while let Some(index) = buffer.find("\n\n") {
+        let frame = buffer[..index].to_string();
+        *buffer = buffer[index + 2..].to_string();
+        for line in frame.lines() {
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            handle_data(data.trim());
+        }
+    }
+}
+
+fn agent_sessions_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("agent-sessions"))
+}
+
+fn agent_session_path(app: &AppHandle, id: &str) -> Result<std::path::PathBuf, String> {
+    let safe_id = sanitize_session_id(id)?;
+    Ok(agent_sessions_dir(app)?.join(format!("{}.json", safe_id)))
+}
+
+fn sanitize_session_id(id: &str) -> Result<String, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err(String::from("session id 不能为空"));
+    }
+    if !trimmed
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+    {
+        return Err(String::from("session id 包含非法字符"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn now_millis() -> Result<u64, String> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    u64::try_from(millis).map_err(|_| String::from("当前时间戳过大"))
+}
+
+fn read_file_with_lines(file_path: &str, offset: usize, limit: usize) -> Result<String, String> {
+    let path = expand_path(file_path);
+    if !path.exists() {
+        return Err(format!("Error: {} not found", path.display()));
+    }
+    if !path.is_file() {
+        return Err(format!(
+            "Error: {} is a directory, not a file",
+            path.display()
+        ));
+    }
+
+    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return Ok(String::from("(empty file)"));
+    }
+
+    let start = offset.saturating_sub(1);
+    let limit = limit.clamp(1, MAX_READ_LINES);
+    let chunk = lines.iter().skip(start).take(limit);
+    let mut output = Vec::new();
+    for (index, line) in chunk.enumerate() {
+        output.push(format!("{}\t{}", start + index + 1, line));
+    }
+    if lines.len() > start + limit {
+        output.push(format!(
+            "... ({} lines total, showing {}-{})",
+            lines.len(),
+            start + 1,
+            start + output.len()
+        ));
+    }
+
+    Ok(output.join("\n"))
+}
+
+fn result_to_tool_result(result: Result<String, String>) -> ToolResult {
+    match result {
+        Ok(output) => ToolResult {
+            success: true,
+            output,
+        },
+        Err(output) => ToolResult {
+            success: false,
+            output,
+        },
+    }
+}
+
+fn expand_path(path: &str) -> std::path::PathBuf {
+    if path == "~" {
+        if let Some(home) = env::var_os("HOME") {
+            return home.into();
+        }
+    }
+    if let Some(stripped) = path.strip_prefix("~/") {
+        if let Some(home) = env::var_os("HOME") {
+            return Path::new(&home).join(stripped);
+        }
+    }
+    Path::new(path).to_path_buf()
+}
+
+fn count_lines(content: &str) -> usize {
+    content.matches('\n').count() + usize::from(!content.is_empty() && !content.ends_with('\n'))
+}
+
+fn simple_diff(old: &str, new: &str) -> String {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let mut lines = vec![String::from("--- before"), String::from("+++ after")];
+    for line in old_lines
+        .iter()
+        .filter(|line| !new_lines.contains(line))
+        .take(20)
+    {
+        lines.push(format!("-{}", line));
+    }
+    for line in new_lines
+        .iter()
+        .filter(|line| !old_lines.contains(line))
+        .take(20)
+    {
+        lines.push(format!("+{}", line));
+    }
+    lines.join("\n")
+}
+
+fn dangerous_command_reason(command: &str) -> Option<&'static str> {
+    let patterns = [
+        (
+            r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)",
+            "recursive delete on home/root",
+        ),
+        (r"\brm\s+(-\w*)?-rf\s", "force recursive delete"),
+        (r"\bmkfs\b", "format filesystem"),
+        (r"\bdd\s+.*of=/dev/", "raw disk write"),
+        (r">\s*/dev/sd[a-z]", "overwrite block device"),
+        (r"\bchmod\s+(-R\s+)?777\s+/", "chmod 777 on root"),
+        (r":\(\)\s*\{.*:\|:.*\}", "fork bomb"),
+        (r"\bcurl\b.*\|\s*(sudo\s+)?bash", "pipe curl to bash"),
+        (r"\bwget\b.*\|\s*(sudo\s+)?bash", "pipe wget to bash"),
+    ];
+
+    patterns.iter().find_map(|(pattern, reason)| {
+        Regex::new(pattern)
+            .ok()
+            .filter(|regex| regex.is_match(command))
+            .map(|_| *reason)
+    })
+}
+
+fn shell_path() -> String {
+    env::var("SHELL").unwrap_or_else(|_| String::from("/bin/zsh"))
+}
+
+fn truncate_middle(content: String, max_chars: usize) -> String {
+    let char_count = content.chars().count();
+    if char_count <= max_chars {
+        return content;
+    }
+
+    let head: String = content.chars().take(6000).collect();
+    let tail: String = content
+        .chars()
+        .rev()
+        .take(3000)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!(
+        "{}\n\n... truncated ({} chars total) ...\n\n{}",
+        head, char_count, tail
+    )
+}
+
+fn truncate_chars(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        content.to_string()
+    } else {
+        format!(
+            "{}\n... (truncated)",
+            content.chars().take(max_chars).collect::<String>()
+        )
+    }
+}
+
+fn collect_grep_files(
+    base: &Path,
+    include: Option<&str>,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    if base.is_file() {
+        return Ok(vec![base.to_path_buf()]);
+    }
+    if !base.is_dir() {
+        return Err(format!("Error: {} is not a directory", base.display()));
+    }
+
+    let mut files = Vec::new();
+    for entry in WalkDir::new(base).into_iter().filter_entry(|entry| {
+        let name = entry.file_name().to_string_lossy();
+        !matches!(
+            name.as_ref(),
+            ".git"
+                | "node_modules"
+                | "__pycache__"
+                | ".venv"
+                | "venv"
+                | ".tox"
+                | "dist"
+                | "build"
+                | "target"
+        )
+    }) {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if let Some(include) = include {
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !glob_match(include, file_name) {
+                continue;
+            }
+        }
+        files.push(path.to_path_buf());
+        if files.len() >= 5000 {
+            break;
+        }
+    }
+    Ok(files)
+}
+
+fn glob_match(pattern: &str, file_name: &str) -> bool {
+    let temp = env::temp_dir().join(file_name);
+    glob::Pattern::new(pattern)
+        .map(|pattern| pattern.matches_path(&temp) || pattern.matches(file_name))
+        .unwrap_or(false)
+}
+
+static PYTHON_INFO: OnceLock<String> = OnceLock::new();
+
+fn get_python_info() -> &'static str {
+    PYTHON_INFO.get_or_init(|| {
+        let output = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .or_else(|_| {
+                std::process::Command::new("python")
+                    .arg("--version")
+                    .output()
+            });
+
+        let version = match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if stdout.is_empty() {
+                    String::from_utf8_lossy(&out.stderr).trim().to_string()
+                } else {
+                    stdout
+                }
+            }
+            _ => String::from("未检测到 Python 环境"),
+        };
+
+        let path_output = std::process::Command::new("which")
+            .arg("python3")
+            .output()
+            .or_else(|_| std::process::Command::new("which").arg("python").output());
+
+        let path = match path_output {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+            _ => String::from("未知"),
+        };
+
+        if version.contains("未检测到") {
+            version
+        } else {
+            format!("{} ({})", version, path)
+        }
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillDefinition {
+    name: String,
+    description: String,
+    path: std::path::PathBuf,
+}
+
+fn discover_skills(app: Option<&AppHandle>) -> Vec<SkillDefinition> {
+    let mut roots = Vec::new();
+    if let Some(app_handle) = app {
+        if let Ok(dir) = app_handle.path().app_data_dir() {
+            roots.push(dir.join("skills"));
+        }
+    }
+
+    let mut skills = Vec::new();
+    for root in roots {
+        collect_skills_from_root(&root, &mut skills);
+    }
+    skills
+}
+
+fn collect_skills_from_root(root: &Path, skills: &mut Vec<SkillDefinition>) {
+    if !root.is_dir() {
+        return;
+    }
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.join("SKILL.md").is_file() {
+            if let Some(skill) = parse_skill_definition(&path) {
+                skills.push(skill);
+            }
+            continue;
+        }
+        if path.is_dir() {
+            let Ok(nested_entries) = fs::read_dir(path) else {
+                continue;
+            };
+            for nested in nested_entries.flatten() {
+                let nested_path = nested.path();
+                if nested_path.join("SKILL.md").is_file() {
+                    if let Some(skill) = parse_skill_definition(&nested_path) {
+                        skills.push(skill);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn parse_skill_definition(path: &Path) -> Option<SkillDefinition> {
+    let body = fs::read_to_string(path.join("SKILL.md")).ok()?;
+    let name = extract_frontmatter_value(&body, "name").or_else(|| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(String::from)
+    })?;
+    let description = extract_frontmatter_value(&body, "description").unwrap_or_default();
+    Some(SkillDefinition {
+        name,
+        description,
+        path: path.to_path_buf(),
+    })
+}
+
+fn extract_frontmatter_value(body: &str, key: &str) -> Option<String> {
+    body.lines().find_map(|line| {
+        let (left, right) = line.split_once(':')?;
+        if left.trim() == key {
+            Some(right.trim().trim_matches('"').to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn list_skill_files(root: &Path) -> Vec<String> {
+    let mut files = vec![root.join("SKILL.md").display().to_string()];
+    for entry in WalkDir::new(root).max_depth(3).into_iter().flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.file_name().is_some_and(|name| name == "SKILL.md") {
+            continue;
+        }
+        files.push(path.display().to_string());
+        if files.len() >= 24 {
+            break;
+        }
+    }
+    files
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in walkdir::WalkDir::new(src) {
+        let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let ty = entry.file_type();
+        let dest_path = dst.join(entry.path().strip_prefix(src).unwrap());
+        if ty.is_dir() {
+            fs::create_dir_all(&dest_path)?;
+        } else if ty.is_file() {
+            fs::copy(entry.path(), &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn import_skill(app: AppHandle, path: String) -> Result<SkillDefinition, String> {
+    let source = Path::new(&path);
+    if !source.is_dir() {
+        return Err("指定的路径不是一个有效的文件夹".to_string());
+    }
+    if !source.join("SKILL.md").is_file() {
+        return Err("文件夹中未找到 SKILL.md 文件".to_string());
+    }
+
+    let skill =
+        parse_skill_definition(source).ok_or_else(|| "无法解析 SKILL.md 信息".to_string())?;
+
+    let skills_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("skills");
+    let dest = skills_dir.join(&skill.name);
+
+    if dest.exists() {
+        return Err(format!(
+            "Skill '{}' 已存在，请先删除旧版本或重命名。",
+            skill.name
+        ));
+    }
+
+    copy_dir_recursive(source, &dest).map_err(|e| format!("复制文件夹失败: {}", e))?;
+
+    parse_skill_definition(&dest).ok_or_else(|| "成功复制，但验证解析失败".to_string())
+}
+
+#[tauri::command]
+fn delete_skill(app: AppHandle, name: String) -> Result<(), String> {
+    let dest = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("skills")
+        .join(&name);
+    if !dest.exists() {
+        return Err(format!("Skill '{}' 不存在", name));
+    }
+    fs::remove_dir_all(&dest).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_skills(app: AppHandle) -> Result<Vec<SkillDefinition>, String> {
+    Ok(discover_skills(Some(&app)))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            list_dir,
+            read_file,
+            write_file,
+            file_modified_at,
+            tool_read,
+            tool_write,
+            tool_edit,
+            tool_bash,
+            tool_grep,
+            tool_glob,
+            tool_skill,
+            tool_subagent,
+            tool_todo,
+            list_agent_sessions,
+            load_agent_session,
+            save_agent_session,
+            start_chat_completion_stream,
+            import_skill,
+            delete_skill,
+            get_skills,
+            stop_chat_stream
+        ])
+        .manage(ActiveStreams(Mutex::new(HashMap::new())))
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_millis();
+        env::temp_dir().join(format!("museai_tool_test_{}_{}", millis, name))
+    }
+
+    #[test]
+    fn tool_read_returns_line_numbers() {
+        let path = temp_path("read.txt");
+        fs::write(&path, "line1\nline2\nline3\n").expect("write temp file");
+
+        let result = tool_read(path.display().to_string(), Some(2), Some(1));
+
+        assert!(result.success);
+        assert_eq!(result.output, "2\tline2\n... (3 lines total, showing 2-2)");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn tool_write_creates_parent_dirs() {
+        let path = temp_path("nested/file.txt");
+
+        let result = tool_write(path.display().to_string(), "hello\nworld".to_string());
+
+        assert!(result.success);
+        assert!(result.output.contains("Wrote 2 lines"));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read temp file"),
+            "hello\nworld"
+        );
+        let _ = fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    #[test]
+    fn tool_edit_requires_unique_match() {
+        let path = temp_path("edit.txt");
+        fs::write(&path, "dup\ndup\n").expect("write temp file");
+
+        let result = tool_edit(
+            path.display().to_string(),
+            "dup".to_string(),
+            "x".to_string(),
+        );
+
+        assert!(!result.success);
+        assert!(result.output.contains("appears 2 times"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn tool_grep_finds_matching_lines() {
+        let dir = temp_path("grep");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("story.md");
+        fs::write(&path, "第一行\n关键词\n").expect("write temp file");
+
+        let result = tool_grep(
+            "关键词".to_string(),
+            Some(dir.display().to_string()),
+            Some("*.md".to_string()),
+        );
+
+        assert!(result.success);
+        assert!(result.output.contains("story.md:2: 关键词"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tool_bash_blocks_dangerous_command() {
+        let result = tool_bash("rm -rf /".to_string(), None, Some(1));
+
+        assert!(!result.success);
+        assert!(result.stderr.contains("Blocked"));
+    }
+
+    #[test]
+    fn tool_todo_rejects_multiple_in_progress_items() {
+        let result = tool_todo(vec![
+            TodoItem {
+                content: "A".to_string(),
+                active_form: "Doing A".to_string(),
+                status: "in_progress".to_string(),
+            },
+            TodoItem {
+                content: "B".to_string(),
+                active_form: "Doing B".to_string(),
+                status: "in_progress".to_string(),
+            },
+        ]);
+
+        assert!(!result.success);
+        assert!(result.output.contains("only one todo"));
+    }
+
+    #[test]
+    fn agent_tool_registry_includes_required_tools() {
+        let tools = agent_tool_definitions();
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name).collect();
+
+        for name in [
+            "read", "write", "edit", "bash", "grep", "glob", "skill", "subagent", "todo",
+        ] {
+            assert!(names.contains(&name), "missing tool: {}", name);
+        }
+        assert!(openai_tool_definitions(&[])
+            .iter()
+            .any(|tool| tool["function"]["name"] == "read"));
+        assert!(anthropic_tool_definitions(&[])
+            .iter()
+            .any(|tool| tool["name"] == "todo"));
+    }
+
+    #[test]
+    fn subagent_tool_registry_omits_recursive_subagent() {
+        let tools = filtered_agent_tool_definitions(AgentRunOptions::subagent().excluded_tools);
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name).collect();
+
+        for name in [
+            "read", "write", "edit", "bash", "grep", "glob", "skill", "todo",
+        ] {
+            assert!(names.contains(&name), "missing child tool: {}", name);
+        }
+        assert!(!names.contains(&"subagent"));
+        assert!(
+            !openai_tool_definitions(AgentRunOptions::subagent().excluded_tools)
+                .iter()
+                .any(|tool| tool["function"]["name"] == "subagent")
+        );
+        assert!(
+            !anthropic_tool_definitions(AgentRunOptions::subagent().excluded_tools)
+                .iter()
+                .any(|tool| tool["name"] == "subagent")
+        );
+    }
+
+    #[test]
+    fn direct_subagent_command_requires_runtime_context() {
+        let empty = tool_subagent("   ".to_string());
+        assert!(!empty.success);
+        assert!(empty.output.contains("task is required"));
+
+        let direct = tool_subagent("检查一致性".to_string());
+        assert!(!direct.success);
+        assert!(direct.output.contains("active Agent chat run"));
+    }
+
+    #[test]
+    fn subagent_output_truncation_adds_marker() {
+        let output = format_subagent_success_output(&"x".repeat(MAX_SUBAGENT_OUTPUT_CHARS + 10));
+
+        assert!(output.starts_with("[Sub-agent completed]"));
+        assert!(output.contains("... (truncated)"));
+        assert!(output.chars().count() < MAX_SUBAGENT_OUTPUT_CHARS + 60);
+    }
+
+    #[test]
+    fn subagent_result_is_model_visible_tool_output() {
+        let success = normalize_agent_tool_output(true, &format_subagent_success_output("done"));
+        let error =
+            normalize_agent_tool_output(false, &format_subagent_error_output("provider failed"));
+
+        assert!(success.starts_with("status: success"));
+        assert!(success.contains("[Sub-agent completed]\ndone"));
+        assert!(error.starts_with("status: error"));
+        assert!(error.contains("Sub-agent error: provider failed"));
+    }
+
+    #[test]
+    fn subagent_options_disallow_recursive_tool() {
+        let options = AgentRunOptions::subagent();
+
+        assert!(options.allows_tool("read"));
+        assert!(!options.allows_tool("subagent"));
+        assert_eq!(options.max_tool_rounds, MAX_SUBAGENT_TOOL_ROUNDS);
+        assert!(!options.emit_events);
+        assert!(!options.emit_todo_updates);
+    }
+
+    #[test]
+    fn normalizes_agent_tool_output_with_status_and_truncation() {
+        let output =
+            normalize_agent_tool_output(true, &"x".repeat(MAX_AGENT_TOOL_OUTPUT_CHARS + 10));
+
+        assert!(output.starts_with("status: success"));
+        assert!(output.contains("... (truncated)"));
+    }
+
+    #[test]
+    fn parse_openai_stream_delta() {
+        let data = r#"{"choices":[{"delta":{"content":"你好"}}]}"#;
+        let event = parse_openai_stream_event(data).expect("parse event");
+
+        assert_eq!(event.content, Some("你好".to_string()));
+    }
+
+    #[test]
+    fn parse_openai_stream_tool_call_chunks() {
+        let mut result = OpenAiRoundResult::default();
+        let first = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"file_path\""}}]}}]}"#;
+        let second = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"README.md\"}"}}]}}]}"#;
+
+        for data in [first, second] {
+            let event = parse_openai_stream_event(data).expect("parse event");
+            for chunk in event.tool_call_chunks {
+                result.apply_tool_call_chunk(chunk);
+            }
+        }
+
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].id, "call_1");
+        assert_eq!(result.tool_calls[0].name, "read");
+        assert_eq!(
+            result.tool_calls[0].arguments,
+            r#"{"file_path":"README.md"}"#
+        );
+    }
+
+    #[test]
+    fn parse_anthropic_stream_delta() {
+        let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}"#;
+        let event = parse_anthropic_stream_event(data).expect("parse event");
+
+        match event {
+            AnthropicStreamEvent::Text(delta) => assert_eq!(delta, "你好"),
+            _ => panic!("expected text delta"),
+        }
+    }
+
+    #[test]
+    fn parse_anthropic_stream_tool_use() {
+        let start = r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"grep","input":{}}}"#;
+        let input = r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":\"Agent\"}"}}"#;
+        let mut result = AnthropicRoundResult::default();
+
+        match parse_anthropic_stream_event(start).expect("parse start") {
+            AnthropicStreamEvent::ToolStart { index, id, name } => {
+                result.start_tool_call(index, id, name);
+            }
+            _ => panic!("expected tool start"),
+        }
+        match parse_anthropic_stream_event(input).expect("parse input") {
+            AnthropicStreamEvent::ToolInputDelta {
+                index,
+                partial_json,
+            } => {
+                result.push_tool_arguments(index, &partial_json);
+            }
+            _ => panic!("expected tool input delta"),
+        }
+
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].id, "toolu_1");
+        assert_eq!(result.tool_calls[0].name, "grep");
+        assert_eq!(result.tool_calls[0].arguments, r#"{"pattern":"Agent"}"#);
+    }
+
+    #[test]
+    fn openai_history_messages_preserve_tool_protocol() {
+        let history = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: "读取文件".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "我来读取。".to_string(),
+                tool_call_id: None,
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "call_1".to_string(),
+                    name: "read".to_string(),
+                    arguments: r#"{"file_path":"README.md"}"#.to_string(),
+                }]),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: r#"{"success":true,"output":"内容"}"#.to_string(),
+                tool_call_id: Some("call_1".to_string()),
+                tool_calls: None,
+            },
+        ];
+
+        let messages = openai_history_messages("系统", &history);
+
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[2]["tool_calls"][0]["function"]["name"], "read");
+        assert_eq!(
+            messages[2]["tool_calls"][0]["function"]["arguments"],
+            r#"{"file_path":"README.md"}"#
+        );
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn anthropic_history_messages_preserve_tool_protocol() {
+        let history = vec![
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "我来读取。".to_string(),
+                tool_call_id: None,
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "toolu_1".to_string(),
+                    name: "read".to_string(),
+                    arguments: r#"{"file_path":"README.md"}"#.to_string(),
+                }]),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: r#"{"success":true,"output":"内容"}"#.to_string(),
+                tool_call_id: Some("toolu_1".to_string()),
+                tool_calls: None,
+            },
+        ];
+
+        let messages = anthropic_history_messages(&history);
+
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"][0]["type"], "text");
+        assert_eq!(messages[0]["content"][1]["type"], "tool_use");
+        assert_eq!(messages[0]["content"][1]["id"], "toolu_1");
+        assert_eq!(messages[0]["content"][1]["input"]["file_path"], "README.md");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[1]["content"][0]["tool_use_id"], "toolu_1");
+    }
+
+    #[test]
+    fn builds_openai_endpoint_from_base_or_full_url() {
+        assert_eq!(
+            build_openai_endpoint("https://api.openai.com"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            build_openai_endpoint("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            build_openai_endpoint("https://api.openai.com/v1/chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn builds_anthropic_endpoint_from_base_or_full_url() {
+        assert_eq!(
+            build_anthropic_endpoint("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            build_anthropic_endpoint("https://api.kimi.com/coding/"),
+            "https://api.kimi.com/coding/v1/messages"
+        );
+        assert_eq!(
+            build_anthropic_endpoint("https://api.kimi.com/coding/v1/messages"),
+            "https://api.kimi.com/coding/v1/messages"
+        );
+    }
+
+    #[test]
+    fn assemble_system_prompt_injects_selected_reference_library() {
+        let dir = temp_path("reference");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(dir.join("设定.md"), "主角住在雾港。").expect("write reference file");
+        fs::write(dir.join("image.png"), "not text").expect("write skipped file");
+
+        let request = ChatStreamRequest {
+            model_interface: "OpenAI-compatible".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: "test".to_string(),
+            model: "gpt-test".to_string(),
+            temperature: Some(0.7),
+            max_output_tokens: Some(1024),
+            max_context_tokens: Some(4096),
+            system_prompt: "你是写作助手。".to_string(),
+            workspace_path: Some("/Users/test/小说工作区".to_string()),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "继续写。".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            reference_libraries: Some(vec![ChatReferenceLibrary {
+                id: "lib-1".to_string(),
+                name: "设定集".to_string(),
+                path: dir.display().to_string(),
+            }]),
+            selected_reference_library_ids: Some(vec!["lib-1".to_string()]),
+        };
+
+        let prompt = assemble_system_prompt(None, &request).expect("assemble prompt");
+
+        assert!(prompt.contains("你是写作助手。"));
+        assert!(prompt.contains("当前工作空间路径：/Users/test/小说工作区"));
+        assert!(prompt.contains("当前选中的范文库："));
+        assert!(prompt.contains("设定集"));
+        assert!(prompt.contains("【重要指令】"));
+        let _ = fs::remove_dir_all(dir);
+    }
+}
