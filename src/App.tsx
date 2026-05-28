@@ -3,6 +3,7 @@ import AppShell from './components/AppShell';
 import Works from './pages/Works';
 import Settings from './pages/Settings';
 import DeAi from './pages/DeAi';
+import Outline from './pages/Outline';
 import Examples from './pages/Examples';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -26,6 +27,7 @@ function App() {
           <Route path="settings" element={<Settings />} />
           <Route path="examples" element={<Examples />} />
           <Route path="de-ai" element={<DeAi />} />
+          <Route path="outline" element={<Outline />} />
         </Route>
       </Routes>
     </Router>

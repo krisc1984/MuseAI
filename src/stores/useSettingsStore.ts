@@ -24,6 +24,8 @@ export interface SettingsState {
   systemPrompt: string;
   deAiDetectorPrompt: string;
   deAiRemoverPrompt: string;
+  outlineCreationPrompt: string;
+  outlineAssessmentPrompt: string;
 
 
   worksDirectory: string | null;
@@ -38,6 +40,10 @@ export interface SettingsState {
   resetDeAiDetectorPrompt: () => void;
   setDeAiRemoverPrompt: (prompt: string) => void;
   resetDeAiRemoverPrompt: () => void;
+  setOutlineCreationPrompt: (prompt: string) => void;
+  resetOutlineCreationPrompt: () => void;
+  setOutlineAssessmentPrompt: (prompt: string) => void;
+  resetOutlineAssessmentPrompt: () => void;
 
   setWorksDirectory: (dir: string | null) => void;
   setArticleType: (type: string[]) => void;
@@ -125,6 +131,31 @@ export const defaultDeAiRemoverPrompt = `你是一名资深网文编辑，专门
 6. 对于已存在的文件，你在使用 write 和 edit 工具前，必须先使用 read 工具来读取文件内容。
 `;
 
+export const defaultOutlineCreationPrompt = `你是一名有着20年网文写作经验的资深网文作者，专门负责小说的大纲制作与优化。
+
+## 注意事项
+- 请始终使用中文回复。你的语气应当温和、直接、专业。
+- 遵循用户的指令，基于所提供的参考资料和技能（Skills）进行大纲创建或优化。
+- 如果是优化现有大纲，请务必针对所提供的评估评分和优化建议，逐条分析并在新大纲中改进。
+- 当你需要保存结果时，请优先使用 write 和 edit 工具。如果是修改现有文件，优先使用 edit tool 替换局部文本。
+- 请将产出的大纲直接写入系统指定的目录或文件中。
+`;
+
+export const defaultOutlineAssessmentPrompt = `你是一名资深的网文主编，专门负责评估小说的商业价值和大纲质量。
+
+请你仔细阅读用户提供的大纲，从以下 5 个维度进行打分，每个维度满分 20 分：
+1. 引流能力：大纲设定的题材、卖点是否能快速吸引读者点击。
+2. 开局钩子：故事开篇是否具有悬念、冲突或强烈的情感刺激，能够抓住读者。
+3. 设定新鲜感：世界观、人物设定或核心金手指是否具备独创性或微创新。
+4. 情绪爽点密度：情节发展中是否包含了高频率、高质量的情绪起伏和爽点。
+5. 人设代入与话题性：主角及重要配角是否立体，行为逻辑能否让读者共鸣或引发讨论。
+
+**输出格式要求：**
+请必须只输出一段 JSON 格式的数据，不要包含任何多余的代码块标记、markdown 格式或解释性文字。
+格式示例如下：
+{"引流能力": 15.0, "开局钩子": 16.5, "设定新鲜感": 14.0, "情绪爽点密度": 18.0, "人设代入与话题性": 15.5, "优化建议": "大纲整体不错，但开局的冲突略显平淡，建议将退婚的情节提前，并增加主角的反击力度以提升爽点。"}
+`;
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -141,6 +172,8 @@ export const useSettingsStore = create<SettingsState>()(
       systemPrompt: defaultSystemPrompt,
       deAiDetectorPrompt: defaultDeAiDetectorPrompt,
       deAiRemoverPrompt: defaultDeAiRemoverPrompt,
+      outlineCreationPrompt: defaultOutlineCreationPrompt,
+      outlineAssessmentPrompt: defaultOutlineAssessmentPrompt,
 
 
       worksDirectory: null,
@@ -170,6 +203,14 @@ export const useSettingsStore = create<SettingsState>()(
       setDeAiRemoverPrompt: (prompt) => set({ deAiRemoverPrompt: prompt }),
 
       resetDeAiRemoverPrompt: () => set({ deAiRemoverPrompt: defaultDeAiRemoverPrompt }),
+
+      setOutlineCreationPrompt: (prompt) => set({ outlineCreationPrompt: prompt }),
+
+      resetOutlineCreationPrompt: () => set({ outlineCreationPrompt: defaultOutlineCreationPrompt }),
+
+      setOutlineAssessmentPrompt: (prompt) => set({ outlineAssessmentPrompt: prompt }),
+
+      resetOutlineAssessmentPrompt: () => set({ outlineAssessmentPrompt: defaultOutlineAssessmentPrompt }),
 
 
 

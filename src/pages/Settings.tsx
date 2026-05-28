@@ -1,11 +1,12 @@
 import React from 'react';
 import { Form, Input, Button, InputNumber, Divider, Typography, Select, message, Anchor } from 'antd';
-import { invoke } from '@tauri-apps/api/core';
 import {
   useSettingsStore,
   defaultSystemPrompt,
   defaultDeAiDetectorPrompt,
   defaultDeAiRemoverPrompt,
+  defaultOutlineCreationPrompt,
+  defaultOutlineAssessmentPrompt,
 } from '../stores/useSettingsStore';
 
 
@@ -54,6 +55,8 @@ const Settings: React.FC = () => {
     { value: 'writer', label: '写文章Agent' },
     { value: 'detector', label: '检测AI味Agent' },
     { value: 'remover', label: '去除AI味Agent' },
+    { value: 'outlineCreation', label: '大纲制作Agent' },
+    { value: 'outlineAssessment', label: '大纲评估Agent' },
   ];
 
 
@@ -70,11 +73,13 @@ const Settings: React.FC = () => {
         thinkingDepth: agentConfig.thinkingDepth ?? store.thinkingDepth,
       });
     }
-    
+
     promptForm.setFieldsValue({
       systemPrompt: store.systemPrompt || defaultSystemPrompt,
       deAiDetectorPrompt: store.deAiDetectorPrompt || defaultDeAiDetectorPrompt,
       deAiRemoverPrompt: store.deAiRemoverPrompt || defaultDeAiRemoverPrompt,
+      outlineCreationPrompt: store.outlineCreationPrompt || defaultOutlineCreationPrompt,
+      outlineAssessmentPrompt: store.outlineAssessmentPrompt || defaultOutlineAssessmentPrompt,
     });
   }, [store, modelForm, promptForm, selectedAgentId]);
 
@@ -119,6 +124,20 @@ const Settings: React.FC = () => {
       reset: () => {
         promptForm.setFieldsValue({ deAiRemoverPrompt: defaultDeAiRemoverPrompt });
         store.resetDeAiRemoverPrompt();
+      },
+    },
+    outlineCreationPrompt: {
+      save: () => store.setOutlineCreationPrompt(promptForm.getFieldValue('outlineCreationPrompt')),
+      reset: () => {
+        promptForm.setFieldsValue({ outlineCreationPrompt: defaultOutlineCreationPrompt });
+        store.resetOutlineCreationPrompt();
+      },
+    },
+    outlineAssessmentPrompt: {
+      save: () => store.setOutlineAssessmentPrompt(promptForm.getFieldValue('outlineAssessmentPrompt')),
+      reset: () => {
+        promptForm.setFieldsValue({ outlineAssessmentPrompt: defaultOutlineAssessmentPrompt });
+        store.resetOutlineAssessmentPrompt();
       },
     },
   };
@@ -255,6 +274,8 @@ const Settings: React.FC = () => {
               systemPrompt: store.systemPrompt || defaultSystemPrompt,
               deAiDetectorPrompt: store.deAiDetectorPrompt || defaultDeAiDetectorPrompt,
               deAiRemoverPrompt: store.deAiRemoverPrompt || defaultDeAiRemoverPrompt,
+              outlineCreationPrompt: store.outlineCreationPrompt || defaultOutlineCreationPrompt,
+              outlineAssessmentPrompt: store.outlineAssessmentPrompt || defaultOutlineAssessmentPrompt,
             }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 40 }}>
@@ -317,11 +338,57 @@ const Settings: React.FC = () => {
                     style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
                   />
                 </Form.Item>
-                <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
                   <Button type="primary" size="large" onClick={() => handleSavePrompt('deAiRemoverPrompt')}>
-                  保存提示词
+                    保存设置
                   </Button>
                   <Button size="large" onClick={() => handleResetPrompt('deAiRemoverPrompt')}>
+                    恢复默认
+                  </Button>
+                </div>
+              </div>
+
+              <div>
+                <Form.Item
+                  label="大纲制作 Agent"
+                  name="outlineCreationPrompt"
+                  help="设置大纲制作 Agent 的系统角色与行为规范。"
+                  style={{ marginBottom: 16 }}
+                >
+                  <TextArea 
+                    rows={7} 
+                    placeholder="请输入大纲制作Agent的系统提示词..."
+                    style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
+                  />
+                </Form.Item>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button type="primary" size="large" onClick={() => handleSavePrompt('outlineCreationPrompt')}>
+                    保存设置
+                  </Button>
+                  <Button size="large" onClick={() => handleResetPrompt('outlineCreationPrompt')}>
+                    恢复默认
+                  </Button>
+                </div>
+              </div>
+
+              <div>
+                <Form.Item
+                  label="大纲评估 Agent"
+                  name="outlineAssessmentPrompt"
+                  help="设置大纲评估 Agent 的系统角色与打分标准。"
+                  style={{ marginBottom: 16 }}
+                >
+                  <TextArea 
+                    rows={7} 
+                    placeholder="请输入大纲评估Agent的系统提示词..."
+                    style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
+                  />
+                </Form.Item>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button type="primary" size="large" onClick={() => handleSavePrompt('outlineAssessmentPrompt')}>
+                    保存设置
+                  </Button>
+                  <Button size="large" onClick={() => handleResetPrompt('outlineAssessmentPrompt')}>
                     恢复默认
                   </Button>
                 </div>

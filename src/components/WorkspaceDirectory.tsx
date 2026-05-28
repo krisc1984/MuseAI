@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Tree, Dropdown, MenuProps, message, Modal, Form, Select, Input, Button } from 'antd';
 import { open } from '@tauri-apps/plugin-dialog';
 import { DownOutlined } from '@ant-design/icons';
@@ -79,9 +80,21 @@ const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType,
     }
   };
 
+  const loadFilesRef = useRef(loadFiles);
+  loadFilesRef.current = loadFiles;
+
   useEffect(() => {
     loadFiles();
   }, [expandedKeys]);
+
+  useEffect(() => {
+    const unlistenPromise = listen('workspace-changed', () => {
+      loadFilesRef.current();
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const getRootDir = async () => {
     const referenceRootDir = await invoke<string>('get_workspace_dir', { dirType });

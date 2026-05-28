@@ -187,9 +187,7 @@ a:hover {
 }
 
 .de-ai-version-select {
-  flex: 1 1 220px;
-  min-width: 180px;
-  max-width: 440px;
+  flex: 0 0 auto;
 }
 
 .de-ai-delete-version {

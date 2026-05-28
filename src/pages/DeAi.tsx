@@ -504,6 +504,7 @@ const DeAi: React.FC = () => {
             <div className="de-ai-editor-toolbar__meta">
               <Select
                 className="de-ai-version-select"
+                style={{ width: 240 }}
                 value={activeVersionId || 'original'}
                 onChange={(val) => {
                   if (val === 'original') {

@@ -89,42 +89,11 @@ interface AgentStoreState {
   createNewSession: () => void;
 }
 
-export const useAgentStore = create<AgentStoreState>((set) => ({
-  messages: [createWelcomeMessage()],
-  input: '',
-  isStreaming: false,
-  expandedBlocks: {},
-  selectedReferenceFiles: [],
-  todos: [],
-  isTodoOpen: false,
-  sessions: [],
-  skills: [],
-  sessionId: createSessionId(),
-  sessionTitle: '新对话',
-  activeRun: { runId: null, messageId: null },
+import { persist } from 'zustand/middleware';
 
-  setMessages: (updater) => set((state) => ({
-    messages: typeof updater === 'function' ? updater(state.messages) : updater,
-  })),
-  setInput: (input) => set({ input }),
-  setIsStreaming: (isStreaming) => set({ isStreaming }),
-  setExpandedBlocks: (updater) => set((state) => ({
-    expandedBlocks: typeof updater === 'function' ? updater(state.expandedBlocks) : updater,
-  })),
-  setSelectedReferenceFiles: (selectedReferenceFiles) => set({ selectedReferenceFiles }),
-  setTodos: (todos) => set({ todos }),
-  setIsTodoOpen: (updater) => set((state) => ({
-    isTodoOpen: typeof updater === 'function' ? updater(state.isTodoOpen) : updater,
-  })),
-  setSessions: (sessions) => set({ sessions }),
-  setSkills: (skills) => set({ skills }),
-  setSessionId: (sessionId) => set({ sessionId }),
-  setSessionTitle: (sessionTitle) => set({ sessionTitle }),
-  setActiveRun: (activeRun) => set({ activeRun }),
-
-  createNewSession: () => {
-    set({
-      activeRun: { runId: null, messageId: null },
+export const useAgentStore = create<AgentStoreState>()(
+  persist(
+    (set) => ({
       messages: [createWelcomeMessage()],
       input: '',
       isStreaming: false,
@@ -132,8 +101,50 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       selectedReferenceFiles: [],
       todos: [],
       isTodoOpen: false,
+      sessions: [],
+      skills: [],
       sessionId: createSessionId(),
       sessionTitle: '新对话',
-    });
-  },
-}));
+      activeRun: { runId: null, messageId: null },
+
+      setMessages: (updater) => set((state) => ({
+        messages: typeof updater === 'function' ? updater(state.messages) : updater,
+      })),
+      setInput: (input) => set({ input }),
+      setIsStreaming: (isStreaming) => set({ isStreaming }),
+      setExpandedBlocks: (updater) => set((state) => ({
+        expandedBlocks: typeof updater === 'function' ? updater(state.expandedBlocks) : updater,
+      })),
+      setSelectedReferenceFiles: (selectedReferenceFiles) => set({ selectedReferenceFiles }),
+      setTodos: (todos) => set({ todos }),
+      setIsTodoOpen: (updater) => set((state) => ({
+        isTodoOpen: typeof updater === 'function' ? updater(state.isTodoOpen) : updater,
+      })),
+      setSessions: (sessions) => set({ sessions }),
+      setSkills: (skills) => set({ skills }),
+      setSessionId: (sessionId) => set({ sessionId }),
+      setSessionTitle: (sessionTitle) => set({ sessionTitle }),
+      setActiveRun: (activeRun) => set({ activeRun }),
+
+      createNewSession: () => {
+        set({
+          activeRun: { runId: null, messageId: null },
+          messages: [createWelcomeMessage()],
+          input: '',
+          isStreaming: false,
+          expandedBlocks: {},
+          todos: [],
+          isTodoOpen: false,
+          sessionId: createSessionId(),
+          sessionTitle: '新对话',
+        });
+      },
+    }),
+    {
+      name: 'museai-agent-storage',
+      partialize: (state) => ({
+        selectedReferenceFiles: state.selectedReferenceFiles,
+      }),
+    }
+  )
+);

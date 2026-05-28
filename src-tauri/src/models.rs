@@ -1,0 +1,273 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Serialize)]
+pub struct FileNode {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub children: Option<Vec<FileNode>>,
+}
+#[derive(Serialize)]
+pub struct ToolResult {
+    pub success: bool,
+    pub output: String,
+}
+#[derive(Serialize)]
+pub struct BashToolResult {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionInfo {
+    pub id: String,
+    pub timestamp: u64,
+    pub ai_score: Option<u32>,
+    pub suggestion: Option<String>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileVersionsMetadata {
+    pub versions: Vec<VersionInfo>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+pub struct TodoItem {
+    pub content: String,
+    pub active_form: String,
+    pub status: String,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+    pub tool_call_id: Option<String>,
+    pub tool_calls: Option<Vec<ChatToolCall>>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub max_context_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
+    pub system_prompt: String,
+    pub workspace_path: Option<String>,
+    pub messages: Vec<ChatMessage>,
+    pub selected_reference_files: Option<Vec<String>>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub allowed_write_paths: Option<Vec<String>>,
+}
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummarizeRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub text: String,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamEvent {
+    pub run_id: String,
+    pub event_type: String,
+    pub delta: Option<String>,
+    pub message: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub tool_status: Option<String>,
+    pub tool_arguments: Option<String>,
+    pub todos: Option<Vec<AgentSessionTodo>>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionTool {
+    pub id: Option<String>,
+    pub name: String,
+    pub result: String,
+    pub status: Option<String>,
+    pub arguments: Option<String>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub thinking: Option<String>,
+    pub tools: Option<Vec<AgentSessionTool>>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionTodo {
+    pub content: String,
+    pub status: String,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionRecord {
+    pub id: String,
+    pub title: String,
+    pub saved_at: u64,
+    pub messages: Vec<AgentSessionMessage>,
+    pub selected_reference_files: Vec<String>,
+    pub todos: Vec<AgentSessionTodo>,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionSummary {
+    pub id: String,
+    pub title: String,
+    pub saved_at: u64,
+}
+
+#[derive(Clone, Serialize)]
+pub struct BashPermissionRequestPayload {
+    pub request_id: String,
+    pub command: String,
+}
+
+#[derive(Clone)]
+pub struct AgentRunOptions {
+    pub max_tool_rounds: usize,
+    pub emit_events: bool,
+    pub emit_todo_updates: bool,
+    pub allowed_tools: Option<Vec<String>>,
+    pub excluded_tools: Vec<String>,
+    pub parent_tool_call_id: Option<String>,
+}
+
+impl AgentRunOptions {
+    pub fn parent() -> Self {
+        Self {
+            max_tool_rounds: MAX_AGENT_TOOL_ROUNDS,
+            emit_events: true,
+            emit_todo_updates: true,
+            allowed_tools: None,
+            excluded_tools: vec![],
+            parent_tool_call_id: None,
+        }
+    }
+
+    pub fn subagent(parent_tool_call_id: Option<String>) -> Self {
+        Self {
+            max_tool_rounds: MAX_SUBAGENT_TOOL_ROUNDS,
+            emit_events: parent_tool_call_id.is_some(),
+            emit_todo_updates: false,
+            allowed_tools: None,
+            excluded_tools: vec!["subagent".to_string()],
+            parent_tool_call_id,
+        }
+    }
+
+    pub fn allows_tool(&self, name: &str) -> bool {
+        if let Some(allowed) = &self.allowed_tools {
+            if !allowed.iter().any(|s| s == name) {
+                return false;
+            }
+        }
+        !self.excluded_tools.iter().any(|s| s == name)
+    }
+}
+#[derive(Clone)]
+pub struct AgentToolDefinition {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input_schema: Value,
+}
+#[derive(Default)]
+pub struct OpenAiRoundResult {
+    pub content: String,
+    pub tool_calls: Vec<AgentToolCall>,
+}
+#[derive(Default)]
+pub struct AnthropicRoundResult {
+    pub content: String,
+    pub tool_calls: Vec<AgentToolCall>,
+    pub thinking_blocks: Vec<Value>,
+}
+#[derive(Clone, Default)]
+pub struct AgentToolCall {
+    pub index: usize,
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+pub struct AgentToolExecution {
+    pub success: bool,
+    pub model_output: String,
+}
+pub struct OpenAiStreamEvent {
+    pub content: Option<String>,
+    pub reasoning_content: Option<String>,
+    pub tool_call_chunks: Vec<OpenAiToolCallChunk>,
+}
+pub struct OpenAiToolCallChunk {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub arguments: Option<String>,
+}
+pub enum AnthropicStreamEvent {
+    Text(String),
+    ThinkingStart {
+        index: usize,
+    },
+    ThinkingDelta {
+        index: usize,
+        thinking: String,
+    },
+    ThinkingSignature {
+        index: usize,
+        signature: String,
+    },
+    RedactedThinking {
+        index: usize,
+        data: String,
+    },
+    ToolStart {
+        index: usize,
+        id: String,
+        name: String,
+    },
+    ToolInputDelta {
+        index: usize,
+        partial_json: String,
+    },
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDefinition {
+    pub name: String,
+    pub description: String,
+    pub path: std::path::PathBuf,
+}
+
+pub const MAX_READ_LINES: usize = 2000;
+pub const MAX_SEARCH_RESULTS: usize = 200;
+pub const MAX_GLOB_RESULTS: usize = 100;
+pub const MAX_BASH_OUTPUT_CHARS: usize = 15_000;
+pub const MAX_AGENT_TOOL_OUTPUT_CHARS: usize = 12_000;
+pub const MAX_AGENT_TOOL_ROUNDS: usize = 50;
+pub const MAX_SUBAGENT_TOOL_ROUNDS: usize = 6;
+pub const MAX_SUBAGENT_OUTPUT_CHARS: usize = 5_000;
+pub const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
+pub const MAX_BASH_TIMEOUT_SECS: u64 = 600;

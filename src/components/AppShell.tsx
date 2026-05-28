@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Menu, ConfigProvider, Modal, Button } from 'antd';
-import { BookOutlined, SettingOutlined, ClearOutlined, ExclamationCircleOutlined, ReadOutlined } from '@ant-design/icons';
+import { BookOutlined, SettingOutlined, ClearOutlined, ExclamationCircleOutlined, ReadOutlined, ProfileOutlined } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -75,6 +75,11 @@ const AppShell: React.FC = () => {
                 key: '/',
                 icon: <BookOutlined />,
                 label: '作品',
+              },
+              {
+                key: '/outline',
+                icon: <ProfileOutlined />,
+                label: '大纲',
               },
               {
                 key: '/de-ai',

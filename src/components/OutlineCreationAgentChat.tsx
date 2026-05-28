@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, Cascader, Form, Modal, Tree, Empty } from 'antd';
-import { BulbOutlined, CloseOutlined, HistoryOutlined, PlusCircleOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { Button, Tooltip, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Select, Empty } from 'antd';
+import { BulbOutlined, CloseOutlined, PlusCircleOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
@@ -11,11 +11,9 @@ import {
   Message, 
   AgentToolEntry, 
   AgentTodo, 
-  SkillDefinition, 
-  AgentSessionSummary, 
-  AgentSessionRecord,
-  createWelcomeMessage
+  SkillDefinition,
 } from '../stores/useAgentStore';
+import { useOutlineStore } from '../stores/useOutlineStore';
 
 interface ChatStreamEvent {
   runId: string;
@@ -47,22 +45,23 @@ interface AgentChatProps {
   title?: string;
 }
 
-const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent' }) => {
+const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '大纲制作Agent' }) => {
   const {
-    messages, setMessages,
-    input, setInput,
-    isStreaming, setIsStreaming,
-    expandedBlocks, setExpandedBlocks,
-    todos, setTodos,
-    isTodoOpen, setIsTodoOpen,
-    sessions, setSessions,
-    skills, setSkills,
-    sessionId, setSessionId,
-    sessionTitle, setSessionTitle,
-    activeRun, setActiveRun,
-    createNewSession,
-    selectedReferenceFiles, setSelectedReferenceFiles
-  } = useAgentStore();
+    creationMessages: messages, setCreationMessages: setMessages,
+    creationInput: input, setCreationInput: setInput,
+    isCreationStreaming: isStreaming, setIsCreationStreaming: setIsStreaming,
+    creationExpandedBlocks: expandedBlocks, setCreationExpandedBlocks: setExpandedBlocks,
+    creationTodos: todos, setCreationTodos: setTodos,
+    isCreationTodoOpen: isTodoOpen, setIsCreationTodoOpen: setIsTodoOpen,
+    creationRun: activeRun, setCreationRun: setActiveRun,
+    creationSelectedReferenceFiles: selectedReferenceFiles, setCreationSelectedReferenceFiles: setSelectedReferenceFiles,
+    creationSelectedOutlineFile: selectedOutlineFile, setCreationSelectedOutlineFile: setAgentSelectedOutlineFile,
+    creationActiveVersionId: activeVersionId, setCreationActiveVersionId: setActiveVersionId,
+    creationVersions: versions,
+  } = useOutlineStore();
+  const { skills, setSkills } = useAgentStore();
+
+
 
   const settings = useSettingsStore();
   const chatHistoryRef = useRef<HTMLDivElement>(null);
@@ -71,14 +70,14 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
   const activeRunRef = useRef(activeRun);
   const messagesRef = useRef(messages);
   const selectedReferenceFilesRef = useRef(selectedReferenceFiles);
-  const sessionIdRef = useRef(sessionId);
-  const sessionTitleRef = useRef(sessionTitle);
   const todosRef = useRef(todos);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [allReferenceFiles, setAllReferenceFiles] = useState<string[]>([]);
   const [referenceTree, setReferenceTree] = useState<any[]>([]);
   const [referenceFilesLoaded, setReferenceFilesLoaded] = useState(false);
+  const [outlineDir, setOutlineDir] = useState<string>('');
+  const [outlineTree, setOutlineTree] = useState<any[]>([]);
 
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => {
@@ -87,20 +86,32 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
 
   React.useEffect(() => {
     invoke<SkillDefinition[]>('get_skills').then(setSkills).catch(console.error);
-    void refreshSessions();
+    invoke<string>('get_workspace_dir', { dirType: 'outline' }).then(async (dir) => {
+      setOutlineDir(dir);
+      const fetchTree = async (path: string): Promise<any[]> => {
+        const items = await invoke<any[]>('list_dir', { path });
+        return Promise.all(items
+          .filter((item) => item.name !== '.versions')
+          .map(async (item) => (
+            item.is_dir
+              ? { ...item, children: await fetchTree(item.path) }
+              : item
+          )));
+      };
+      try {
+        const tree = await fetchTree(dir);
+        setOutlineTree(tree);
+      } catch (e) {
+        console.error(e);
+      }
+    }).catch(console.error);
   }, []);
 
   useEffect(() => {
     selectedReferenceFilesRef.current = selectedReferenceFiles;
   }, [selectedReferenceFiles]);
 
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
 
-  useEffect(() => {
-    sessionTitleRef.current = sessionTitle;
-  }, [sessionTitle]);
 
   useEffect(() => {
     todosRef.current = todos;
@@ -211,9 +222,6 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
         activeRunRef.current = { runId: null, messageId: null };
         setActiveRun({ runId: null, messageId: null });
         setIsStreaming(false);
-        window.setTimeout(() => {
-          void saveCurrentSession();
-        }, 0);
       }
     });
 
@@ -265,12 +273,33 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
     }
   }, [isSettingsOpen, referenceFilesLoaded]);
 
+
+
   useEffect(() => {
     if (!referenceFilesLoaded) return;
     setSelectedReferenceFiles(
       selectedReferenceFiles.filter((file) => allReferenceFiles.includes(file))
     );
   }, [allReferenceFiles, referenceFilesLoaded]);
+
+  useEffect(() => {
+    if (selectedOutlineFile) {
+      invoke('list_file_versions', { path: selectedOutlineFile })
+        .then((v: any) => {
+          const sorted = v.sort((a: any, b: any) => b.timestamp - a.timestamp);
+          useOutlineStore.getState().setCreationVersions(sorted);
+          if (sorted.length > 0) {
+            useOutlineStore.getState().setCreationActiveVersionId(sorted[0].id);
+          } else {
+            useOutlineStore.getState().setCreationActiveVersionId(null);
+          }
+        })
+        .catch(console.error);
+    } else {
+      useOutlineStore.getState().setCreationVersions([]);
+      useOutlineStore.getState().setCreationActiveVersionId(null);
+    }
+  }, [selectedOutlineFile]);
 
   const scrollToBottomOnce = () => {
     window.requestAnimationFrame(() => {
@@ -280,44 +309,43 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
     });
   };
 
-  const handleSend = async () => {
-    const trimmed = input.trim();
-    if (!trimmed || isStreaming) {
-      return;
-    }
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [assessmentData, setAssessmentData] = useState<any>(null);
 
+  const startAgent = async (finalInputText: string) => {
+    let { creationSelectedOutlineFile: selectedOutlineFile, creationActiveVersionId: activeVersionId } = useOutlineStore.getState();
     const isFirstUserMessage = !messages.some((message) => message.role === 'user');
-    if (isFirstUserMessage) {
-      const fallbackTitle = summarizeSessionTitle(trimmed);
-      sessionTitleRef.current = fallbackTitle;
-      setSessionTitle(fallbackTitle);
 
-      // Background LLM title generation
-      invoke<string>('summarize_text', {
-        request: {
-          modelInterface: settings.modelInterface,
-          baseUrl: settings.llmBaseUrl,
-          apiKey: settings.llmApiKey,
-          model: settings.llmModel,
-          temperature: settings.temperature,
-          maxOutputTokens: 64,
-          text: trimmed,
-        },
-      }).then((generatedTitle) => {
-        const currentId = sessionIdRef.current;
-        sessionTitleRef.current = generatedTitle;
-        setSessionTitle(generatedTitle);
-        void invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
-        void refreshSessions();
-      }).catch(() => {
-        // Keep fallback title on generation failure
-      });
+    if (isFirstUserMessage && selectedOutlineFile) {
+      try {
+        const newVersion: any = await invoke('create_file_version', { path: selectedOutlineFile });
+        const v: any = await invoke('list_file_versions', { path: selectedOutlineFile });
+        const sorted = v.sort((a: any, b: any) => b.timestamp - a.timestamp);
+        useOutlineStore.getState().setCreationVersions(sorted);
+        useOutlineStore.getState().setCreationActiveVersionId(newVersion.id);
+        activeVersionId = newVersion.id;
+      } catch (err) {
+        console.error('Failed to create file version:', err);
+      }
     }
+
+    const versionPath = (selectedOutlineFile && activeVersionId) 
+      ? (() => {
+          const parts = selectedOutlineFile.split(/[\\/]/);
+          const fileName = parts.pop();
+          const parentDir = parts.join('/');
+          return `${parentDir}/.versions/${fileName}/${activeVersionId}`;
+        })()
+      : selectedOutlineFile;
+
+    const contextPrefix = versionPath
+      ? `【当前正在编辑的大纲文件】：${versionPath}\n（如果你需要读取、修改或优化现有大纲，请直接操作此文件）\n\n`
+      : '';
 
     const userMessage: Message = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      content: trimmed,
+      content: contextPrefix + finalInputText,
       tools: [],
       articleType: settings.articleType?.join('-') || '默认',
     };
@@ -338,30 +366,29 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
     const articleTypeStr = settings.articleType?.join('-') || '';
     const mentionedSkillNames: string[] = [];
     if (articleTypeStr === '男频-长篇-玄幻脑洞') {
-      mentionedSkillNames.push('fanqie-xuanhuan-writer');
+      mentionedSkillNames.push('fanqie-xuanhuan-outline');
     } else if (articleTypeStr === '女频-短篇-虐心婚恋') {
-      mentionedSkillNames.push('fanqie-short-nuexin-writer');
-    } else if (articleTypeStr === '公众号') {
-      mentionedSkillNames.push('kitt-writer');
+      mentionedSkillNames.push('fanqie-short-nuexin-outline');
     }
     const mentionedSkills = skills.filter(s => mentionedSkillNames.includes(s.name));
 
     try {
+      const outlineDir = await invoke<string>('get_workspace_dir', { dirType: 'outline' });
       const runId = await invoke<string>('start_chat_completion_stream', {
         request: {
           modelInterface: settings.modelInterface,
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
-          temperature: settings.agentConfigs?.writer?.temperature ?? settings.temperature,
-          maxOutputTokens: settings.agentConfigs?.writer?.maxOutputTokens ?? settings.maxOutputTokens,
-          maxContextTokens: settings.agentConfigs?.writer?.maxContextTokens ?? settings.maxContextTokens,
-          thinkingDepth: settings.agentConfigs?.writer?.thinkingDepth ?? settings.thinkingDepth,
-          systemPrompt: settings.systemPrompt,
-          workspacePath: settings.worksDirectory,
+          temperature: settings.agentConfigs?.outlineCreation?.temperature ?? settings.temperature,
+          maxOutputTokens: settings.agentConfigs?.outlineCreation?.maxOutputTokens ?? settings.maxOutputTokens,
+          maxContextTokens: settings.agentConfigs?.outlineCreation?.maxContextTokens ?? settings.maxContextTokens,
+          thinkingDepth: settings.agentConfigs?.outlineCreation?.thinkingDepth ?? settings.thinkingDepth,
+          systemPrompt: `${settings.outlineCreationPrompt}\n\n【系统指令】请将产出的大纲保存到系统工作区 ~/Documents/MuseAI/outline 文件夹中。`,
+          workspacePath: outlineDir,
           messages: buildModelMessages(messages.concat(userMessage), userMessage.id, mentionedSkills),
           selectedReferenceFiles: selectedReferenceFiles,
-          allowedTools: ['read', 'write', 'edit', 'grep', 'glob', 'skill', 'subagent', 'todo'],
+          allowedTools: ['read', 'write', 'edit', 'grep', 'glob', 'skill'],
         },
       });
       activeRunRef.current = { runId, messageId: agentMessageId };
@@ -375,6 +402,46 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
           ? { ...msg, content: `请求模型失败：${String(err)}` }
           : msg
       )));
+    }
+  };
+
+  const handleSend = async () => {
+    const trimmed = input.trim();
+    if (!trimmed || isStreaming) {
+      return;
+    }
+
+    const { creationSelectedOutlineFile: selectedOutlineFile, creationActiveVersionId: activeVersionId, creationVersions: versions } = useOutlineStore.getState();
+
+    if (!selectedOutlineFile) {
+      await startAgent(trimmed);
+      return;
+    }
+
+    const currentVersion = activeVersionId ? versions.find(v => v.id === activeVersionId) : versions.length > 0 ? versions[0] : null;
+
+    if (currentVersion?.suggestion) {
+      try {
+        const parsed = JSON.parse(currentVersion.suggestion);
+        setAssessmentData(parsed);
+        setIsConfirming(true);
+        return;
+      } catch (e) {
+        console.error('Failed to parse suggestion', e);
+      }
+    }
+    
+    // No assessment data, directly start
+    await startAgent(`${trimmed}`);
+  };
+
+  const confirmAssessmentSend = async () => {
+    setIsConfirming(false);
+    try {
+      const promptAddon = `\n\n参考以下大纲评估意见进行优化：\n${JSON.stringify(assessmentData, null, 2)}`;
+      await startAgent(`${input.trim()}${promptAddon}`);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -393,60 +460,13 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
     setExpandedBlocks((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const refreshSessions = async () => {
-    try {
-      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions');
-      setSessions(summaries);
-    } catch (err) {
-      console.error('读取历史会话失败:', err);
-    }
-  };
 
-  const saveCurrentSession = async () => {
-    const userMessages = messagesRef.current.filter((message) => message.role === 'user');
-    if (userMessages.length === 0) {
-      return;
-    }
 
-    try {
-      await invoke<AgentSessionSummary>('save_agent_session', {
-        session: {
-          id: sessionIdRef.current,
-          title: sessionTitleRef.current,
-          savedAt: 0,
-          messages: messagesRef.current,
-          selectedReferenceFiles: selectedReferenceFilesRef.current,
-          todos: todosRef.current,
-        },
-      });
-      await refreshSessions();
-    } catch (err) {
-      console.error('保存会话失败:', err);
-    }
-  };
 
-  const openSession = async (id: string) => {
-    try {
-      const session = await invoke<AgentSessionRecord>('load_agent_session', { id });
-      activeRunRef.current = { runId: null, messageId: null };
-      setActiveRun({ runId: null, messageId: null });
-      setSessionId(session.id);
-      setSessionTitle(session.title);
-      setMessages(session.messages.length > 0 ? session.messages : [createWelcomeMessage()]);
-      setSelectedReferenceFiles(session.selectedReferenceFiles ?? []);
-      setTodos(session.todos ?? []);
-      setIsTodoOpen(false);
-      setIsStreaming(false);
-      setInput('');
-      scrollToBottomOnce();
-    } catch (err) {
-      console.error('打开历史会话失败:', err);
-    }
-  };
 
   const contextStats = estimateContextUsage({
     systemPrompt: settings.systemPrompt,
-    workspacePath: settings.worksDirectory,
+    workspacePath: outlineDir,
     selectedReferenceFiles,
     skills,
     messages,
@@ -466,6 +486,14 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
     children: node.children ? mapReferenceTreeData(node.children) : undefined,
   }));
 
+  const mapOutlineTreeData = (nodes: any[]): any[] => nodes.map((node) => ({
+    title: <span title={node.path}>{node.name}</span>,
+    key: node.path,
+    value: node.path,
+    selectable: !node.is_dir && (node.name.endsWith('.md') || node.name.endsWith('.txt')),
+    children: node.children ? mapOutlineTreeData(node.children) : undefined,
+  }));
+
   const contextTooltip = (
     <div className="agent-context-popover">
       <div className="agent-context-popover__header">
@@ -477,7 +505,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
       </div>
       <div className="agent-context-popover__row">
         <span className="agent-context-popover__label">工作空间：</span>
-        <span className="agent-context-popover__value" style={{ wordBreak: 'break-all' }}>{settings.worksDirectory || '未选择'}</span>
+        <span className="agent-context-popover__value" style={{ wordBreak: 'break-all' }}>{outlineDir || '加载中...'}</span>
       </div>
       <div className="agent-context-popover__row">
         <span className="agent-context-popover__label">范文：</span>
@@ -514,7 +542,23 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
   return (
     <div className="agent-chat">
       <Modal
-        title="写文章 Agent 设置"
+        title="发现大纲评估意见"
+        open={isConfirming}
+        onOk={confirmAssessmentSend}
+        onCancel={() => setIsConfirming(false)}
+        okText="确认并发送"
+        cancelText="取消"
+      >
+        <p>系统检测到所选大纲存在评估建议，是否带上以下建议进行优化？</p>
+        <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 300, overflowY: 'auto' }}>
+          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            {JSON.stringify(assessmentData, null, 2)}
+          </pre>
+        </div>
+      </Modal>
+
+      <Modal
+        title="大纲制作 Agent 设置"
         open={isSettingsOpen}
         okText="确定"
         cancelText="取消"
@@ -550,16 +594,44 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
                     },
                   ],
                 },
-                {
-                  value: '公众号',
-                  label: '公众号',
-                },
+
               ]}
               placeholder="请选择文章类型"
               style={{ width: '100%' }}
             />
           </Form.Item>
           
+          <Form.Item label="选择现有大纲">
+            <TreeSelect
+              allowClear
+              treeExpandAction="click"
+              treeData={mapOutlineTreeData(outlineTree)}
+              value={selectedOutlineFile}
+              onChange={(val) => {
+                setAgentSelectedOutlineFile(val ? String(val) : null);
+              }}
+              placeholder="留空为创建新大纲，选择已有文件为优化大纲"
+            />
+          </Form.Item>
+
+          {selectedOutlineFile && (
+            <Form.Item label="选择大纲版本">
+              <Select
+                value={activeVersionId || 'original'}
+                onChange={(val) => {
+                  setActiveVersionId(val === 'original' ? null : String(val));
+                }}
+                options={[
+                  { value: 'original', label: '原文件' },
+                  ...versions.map(v => ({
+                    value: v.id,
+                    label: `版本 ${new Date(v.timestamp).toLocaleString()}`
+                  }))
+                ]}
+              />
+            </Form.Item>
+          )}
+
           <Form.Item label="选择参考范文" style={{ marginBottom: 0 }}>
             <div className="de-ai-reference-picker">
               {allReferenceFiles.length > 0 ? (
@@ -580,6 +652,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
               )}
             </div>
           </Form.Item>
+
         </Form>
       </Modal>
 
@@ -589,35 +662,9 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
           <h3>{title}</h3>
         </div>
         <div className="agent-chat__header-actions">
-          <Tooltip title="新建 Session">
-            <Button type="text" icon={<PlusCircleOutlined />} onClick={createNewSession} />
+          <Tooltip title="清除当前对话">
+            <Button type="text" icon={<PlusCircleOutlined />} onClick={() => setMessages([])} />
           </Tooltip>
-          <Dropdown
-            menu={{
-              items: sessions.length > 0
-                ? sessions.map((session) => ({
-                    key: session.id,
-                    label: (
-                      <div className="agent-session-menu-item">
-                        <strong>{session.title}</strong>
-                        <span>{formatSavedAt(session.savedAt)}</span>
-                      </div>
-                    ),
-                  }))
-                : [{ key: 'empty', disabled: true, label: '暂无历史 Session' }],
-              onClick: ({ key }) => {
-                if (key !== 'empty') {
-                  void openSession(String(key));
-                }
-              },
-            }}
-            placement="bottomRight"
-            trigger={['click']}
-          >
-            <Tooltip title="历史 Session">
-              <Button type="text" icon={<HistoryOutlined />} onClick={() => void refreshSessions()} />
-            </Tooltip>
-          </Dropdown>
           {onClose && (
             <Tooltip title="隐藏 Agent">
               <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
@@ -1040,24 +1087,4 @@ function buildEstimatedSystemPrompt(
   return lines.filter(Boolean).join('\n\n');
 }
 
-function summarizeSessionTitle(firstMessage: string) {
-  const normalized = firstMessage.replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return '新对话';
-  }
-  return normalized.length > 24 ? `${normalized.slice(0, 24)}...` : normalized;
-}
-
-function formatSavedAt(value: number) {
-  if (!value) {
-    return '未保存';
-  }
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-}
-
-export default AgentChat;
+export default OutlineCreationAgentChat;
