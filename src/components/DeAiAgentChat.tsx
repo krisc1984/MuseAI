@@ -74,7 +74,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
   const settings = useSettingsStore();
   const [fullSystemPrompt, setFullSystemPrompt] = useState('');
   const [input, setInput] = useState('');
-  const [hasStarted, setHasStarted] = useState(false);
+  const hasStarted = messages.length > 0;
 
   useEffect(() => {
     const build = async () => {
@@ -289,7 +289,6 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
     }
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
-    setHasStarted(true);
     setInput('');
     onRunningChange?.(true);
     scrollToBottomOnce();
@@ -358,7 +357,6 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
     await handleStop();
     setMessages([]);
     setExpandedBlocks({});
-    setHasStarted(false);
     setInput('');
   };
 
