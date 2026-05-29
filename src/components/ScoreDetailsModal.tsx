@@ -76,7 +76,7 @@ export const ScoreDetailsModal: React.FC<ScoreDetailsModalProps> = ({
       open={isOpen}
       onCancel={onClose}
       footer={null}
-      width={800}
+      width={960}
       centered
       destroyOnClose
       styles={{
@@ -91,7 +91,7 @@ export const ScoreDetailsModal: React.FC<ScoreDetailsModalProps> = ({
       <div style={{ display: 'flex', minHeight: 400 }}>
         {/* Left Side: Radar Chart */}
         <div style={{ 
-          flex: '0 0 380px', 
+          flex: '0 0 400px', 
           padding: '32px 24px', 
           backgroundColor: '#ffffff',
           borderRight: '1px solid rgba(0,0,0,0.06)',
@@ -142,7 +142,7 @@ export const ScoreDetailsModal: React.FC<ScoreDetailsModalProps> = ({
                   }}>
                     {item.label}
                   </div>
-                  <Paragraph style={{ color: '#555', margin: 0, fontSize: 14, lineHeight: 1.6 }}>
+                  <Paragraph style={{ color: '#555', margin: 0, fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
                     {item.text}
                   </Paragraph>
                 </div>

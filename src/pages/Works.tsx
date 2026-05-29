@@ -129,10 +129,11 @@ const Works: React.FC = () => {
   if (currentSummaryResult?.scoreJson) {
     try {
       parsedSummaryScore = JSON.parse(currentSummaryResult.scoreJson);
-      totalScore = scoreFields.reduce((sum, field) => {
+      const sum = scoreFields.reduce((acc, field) => {
         const value = parsedSummaryScore?.[field];
-        return sum + (typeof value === 'number' ? value : 0);
+        return acc + (typeof value === 'number' ? value : 0);
       }, 0);
+      totalScore = Number(sum.toFixed(1));
     } catch (e) {
       parsedSummaryScore = null;
       totalScore = 0;

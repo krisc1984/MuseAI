@@ -149,7 +149,7 @@ const Outline: React.FC = () => {
           sum += parsedAssessment[k];
         }
       });
-      totalScore = sum;
+      totalScore = Number(sum.toFixed(1));
     } catch (e) {
       // Ignore parse error
     }

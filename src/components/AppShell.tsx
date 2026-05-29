@@ -56,16 +56,9 @@ const AppShell: React.FC = () => {
           theme="light"
           style={{
             borderRight: `1px solid ${warmMinimalistTheme.token?.colorBorder}`,
+            paddingTop: '16px',
           }}
         >
-          <div
-            style={{
-              height: 32,
-              margin: '16px 12px',
-              background: 'rgba(0, 0, 0, 0.05)',
-              borderRadius: 6,
-            }}
-          />
           <Menu
             mode="inline"
             selectedKeys={[location.pathname]}

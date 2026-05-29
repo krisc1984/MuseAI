@@ -464,9 +464,24 @@ const DeAi: React.FC = () => {
   }));
 
   let parsedAssessment: any = null;
+  let displayScore: number | null = aiScore;
   if (suggestion) {
     try {
       parsedAssessment = JSON.parse(suggestion);
+      const subScoreKeys = ['可预测的节奏', '功能性用词', '机械式写作', '可预测的句法', '缺乏创造性语法', '实用主义词汇', '单调的句法', '机械般的正式感'];
+      let sum = 0;
+      let hasSubScores = false;
+      for (const key of subScoreKeys) {
+        if (typeof parsedAssessment[key] === 'number') {
+          sum += parsedAssessment[key];
+          hasSubScores = true;
+        }
+      }
+      if (hasSubScores) {
+        displayScore = Number(sum.toFixed(1));
+      } else if (typeof parsedAssessment.ai_score === 'number') {
+        displayScore = Number(parsedAssessment.ai_score.toFixed(1));
+      }
     } catch (e) {
       // not json
     }
@@ -638,10 +653,29 @@ const DeAi: React.FC = () => {
                 }}
                 options={[
                   { value: 'original', label: '原文件' },
-                  ...versions.map(v => ({
-                    value: v.id,
-                    label: `版本 ${new Date(v.timestamp).toLocaleString()} ${v.aiScore != null ? `(AI味: ${v.aiScore})` : ''}`
-                  }))
+                  ...versions.map(v => {
+                    let versionDisplayScore = v.aiScore;
+                    if (v.suggestion) {
+                      try {
+                        const p = JSON.parse(v.suggestion);
+                        const subScoreKeys = ['可预测的节奏', '功能性用词', '机械式写作', '可预测的句法', '缺乏创造性语法', '实用主义词汇', '单调的句法', '机械般的正式感'];
+                        let sum = 0;
+                        let hasSub = false;
+                        for (const k of subScoreKeys) {
+                          if (typeof p[k] === 'number') {
+                            sum += p[k];
+                            hasSub = true;
+                          }
+                        }
+                        if (hasSub) versionDisplayScore = Number(sum.toFixed(1));
+                        else if (typeof p.ai_score === 'number') versionDisplayScore = Number(p.ai_score.toFixed(1));
+                      } catch(e) {}
+                    }
+                    return {
+                      value: v.id,
+                      label: `版本 ${new Date(v.timestamp).toLocaleString()} ${versionDisplayScore != null ? `(AI味: ${versionDisplayScore})` : ''}`
+                    };
+                  })
                 ]}
               />
               {activeVersionId && (
@@ -678,7 +712,7 @@ const DeAi: React.FC = () => {
               >
                 <div 
                   className="de-ai-score-pill" 
-                  aria-label={`AI味评分${aiScore === null ? '暂无' : aiScore}`}
+                  aria-label={`AI味评分${displayScore === null ? '暂无' : displayScore}`}
                   style={{ cursor: 'pointer' }}
                   onClick={() => {
                     if (parsedAssessment) {
@@ -689,11 +723,11 @@ const DeAi: React.FC = () => {
                   <span className="de-ai-score-pill__label">AI味</span>
                   <Progress 
                     type="circle" 
-                    percent={aiScore ?? 0} 
+                    percent={displayScore ?? 0} 
                     size={30} 
-                    status={aiScore === null ? 'normal' : (aiScore > 50 ? 'exception' : (aiScore > 30 ? 'normal' : 'success'))} 
-                    format={() => aiScore === null ? '--' : `${aiScore}`}
-                    strokeColor={aiScore === null ? '#e8e8e8' : undefined}
+                    status={displayScore === null ? 'normal' : (displayScore > 50 ? 'exception' : (displayScore > 30 ? 'normal' : 'success'))} 
+                    format={() => displayScore === null ? '--' : `${displayScore}`}
+                    strokeColor={displayScore === null ? '#e8e8e8' : undefined}
                   />
                 </div>
               </Popover>
@@ -701,7 +735,7 @@ const DeAi: React.FC = () => {
                 isOpen={isScoreModalOpen} 
                 onClose={() => setIsScoreModalOpen(false)} 
                 parsedAssessment={parsedAssessment} 
-                totalScore={aiScore ?? 0}
+                totalScore={displayScore ?? 0}
                 scoreFields={aiScoreFields}
                 title="AI味综合评分"
                 chartTitle="AI特征多维雷达图"
