@@ -4,9 +4,10 @@ import MarkdownEditor from '../components/MarkdownEditor';
 import DeAiAgentChat from '../components/DeAiAgentChat';
 import { useDeAiStore } from '../stores/useDeAiStore';
 import { defaultDeAiDetectorPrompt, defaultDeAiRemoverPrompt, useSettingsStore } from '../stores/useSettingsStore';
-import { Button, Empty, Modal, Popconfirm, Progress, Select, Tree, Typography, message } from 'antd';
+import { Button, Empty, Modal, Popconfirm, Progress, Select, Tree, Typography, message, Popover } from 'antd';
 import { DeleteOutlined, SettingOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
+import { ScoreDetailsModal } from '../components/ScoreDetailsModal';
 
 
 function extractSuggestionText(rawSuggestion: string): string {
@@ -82,6 +83,7 @@ const DeAi: React.FC = () => {
   const [isDetectorSettingsOpen, setIsDetectorSettingsOpen] = useState(false);
   const [isDetectorOpen, setIsDetectorOpen] = useState(false);
   const [isRemoverSettingsOpen, setIsRemoverSettingsOpen] = useState(false);
+  const [isScoreModalOpen, setIsScoreModalOpen] = useState(false);
   const [referenceFilesLoaded, setReferenceFilesLoaded] = useState(false);
   const directoryRef = useRef<HTMLDivElement>(null);
   const detectorTargetVersionIdRef = useRef<string | null>(null);
@@ -191,7 +193,7 @@ const DeAi: React.FC = () => {
     ? `请分析作品: ${activeVersionId ? getVersionPath(selectedWorkFile, activeVersionId) : selectedWorkFile}\n范例参考: ${detectorReferenceText}`
     : '';
   const removerStartContent = selectedWorkFile
-    ? `请根据以下修改意见，直接修改作品 ${activeVersionId ? getVersionPath(selectedWorkFile, activeVersionId) : selectedWorkFile}，降低AI味：\n${suggestion || ''}`
+    ? `请根据以下修改意见，直接修改作品 ${activeVersionId ? getVersionPath(selectedWorkFile, activeVersionId) : selectedWorkFile}，降低AI味：\n${extractSuggestionText(suggestion || '')}`
     : '';
 
   const buildDetectorPrompt = (versionId: string, historySuggestions: VersionInfo[]) => {
@@ -407,8 +409,8 @@ const DeAi: React.FC = () => {
         ? jsonResult.优化建议.trim()
         : suggestionMatch?.[1]?.trim();
     
-    // 仅获取检测AI味Agent给出json里的“优化建议”字段
-    const textToStore = parsedSuggestion || '';
+    // 存储完整的 JSON 以保留各项子评分
+    const textToStore = jsonText || (parsedSuggestion || '');
     
     if (parsedScore !== null && parsedSuggestion) {
       const roundedScore = Math.round(parsedScore);
@@ -458,6 +460,26 @@ const DeAi: React.FC = () => {
     selectable: false,
     children: node.children ? mapReferenceTreeData(node.children) : undefined,
   }));
+
+  let parsedAssessment: any = null;
+  if (suggestion) {
+    try {
+      parsedAssessment = JSON.parse(suggestion);
+    } catch (e) {
+      // not json
+    }
+  }
+
+  const aiScoreFields = [
+    { name: '可预测的节奏', max: 12.5 },
+    { name: '功能性用词', max: 12.5 },
+    { name: '机械式写作', max: 12.5 },
+    { name: '可预测的句法', max: 12.5 },
+    { name: '缺乏创造性语法', max: 12.5 },
+    { name: '实用主义词汇', max: 12.5 },
+    { name: '单调的句法', max: 12.5 },
+    { name: '机械般的正式感', max: 12.5 }
+  ];
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden', background: '#faf9f5' }}>
@@ -635,17 +657,53 @@ const DeAi: React.FC = () => {
                   <Button className="de-ai-delete-version" type="text" danger icon={<DeleteOutlined />} />
                 </Popconfirm>
               )}
-              <div className="de-ai-score-pill" aria-label={`AI味评分${aiScore === null ? '暂无' : aiScore}`}>
-                <span className="de-ai-score-pill__label">AI味</span>
-                <Progress 
-                  type="circle" 
-                  percent={aiScore ?? 0} 
-                  size={30} 
-                  status={aiScore === null ? 'normal' : (aiScore > 50 ? 'exception' : (aiScore > 30 ? 'normal' : 'success'))} 
-                  format={() => aiScore === null ? '--' : `${aiScore}`}
-                  strokeColor={aiScore === null ? '#e8e8e8' : undefined}
-                />
-              </div>
+              <Popover
+                placement="bottomRight"
+                content={
+                  parsedAssessment ? (
+                    <div style={{ minWidth: 200 }}>
+                      {aiScoreFields.map(field => (
+                        <div key={field.name} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span>{field.name}</span>
+                          <span>{typeof parsedAssessment[field.name] === 'number' ? parsedAssessment[field.name] : 0}/{field.max}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ padding: '8px 16px', color: '#999' }}>暂无评估结果</div>
+                  )
+                }
+              >
+                <div 
+                  className="de-ai-score-pill" 
+                  aria-label={`AI味评分${aiScore === null ? '暂无' : aiScore}`}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => {
+                    if (parsedAssessment) {
+                      setIsScoreModalOpen(true);
+                    }
+                  }}
+                >
+                  <span className="de-ai-score-pill__label">AI味</span>
+                  <Progress 
+                    type="circle" 
+                    percent={aiScore ?? 0} 
+                    size={30} 
+                    status={aiScore === null ? 'normal' : (aiScore > 50 ? 'exception' : (aiScore > 30 ? 'normal' : 'success'))} 
+                    format={() => aiScore === null ? '--' : `${aiScore}`}
+                    strokeColor={aiScore === null ? '#e8e8e8' : undefined}
+                  />
+                </div>
+              </Popover>
+              <ScoreDetailsModal 
+                isOpen={isScoreModalOpen} 
+                onClose={() => setIsScoreModalOpen(false)} 
+                parsedAssessment={parsedAssessment} 
+                totalScore={aiScore ?? 0}
+                scoreFields={aiScoreFields}
+                title="AI味综合评分"
+                chartTitle="AI特征多维雷达图"
+              />
             </div>
           )}
         </div>

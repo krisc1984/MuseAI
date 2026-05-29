@@ -39,6 +39,7 @@ build/
 
 # Testing
 coverage/
+scratch/
 
 # OS files
 .DS_Store
