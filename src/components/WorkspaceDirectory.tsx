@@ -424,10 +424,10 @@ const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType,
           
           <Form.Item 
             name="url" 
-            label="小说主页链接 (URL)" 
+            label="小说链接 (主页/阅读页 URL)" 
             rules={[{ required: true, message: '请输入链接' }, { type: 'url', message: '请输入有效的网址' }]}
           >
-            <Input placeholder="例如: https://fanqienovel.com/page/7097114126693960704" />
+            <Input placeholder="例如: https://fanqienovel.com/page/... 或 /reader/..." />
           </Form.Item>
           
           <Form.Item>

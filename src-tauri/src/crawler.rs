@@ -177,10 +177,39 @@ pub fn crawl_fanqie_article(
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
+    // Check if it's a reader URL first
+    let reader_match = Regex::new(r"/reader/(\d+)").unwrap().captures(url);
+    if let Some(cap) = reader_match {
+        let chapter_id = cap[1].to_string();
+        
+        let (title, content) = fetch_chapter_content(&client, &chapter_id)?;
+        let decrypted = decrypt_text(&content);
+        let cleaned = clean_html_content(&decrypted);
+
+        let novel_name = if title.is_empty() {
+            format!("短篇小说_{}", chapter_id)
+        } else {
+            title.clone()
+        };
+
+        let target_path = Path::new(target_dir);
+        let md_content = format!(
+            "# {}\n\n**原文链接**: {}\n\n---\n\n{}",
+            novel_name, url, cleaned
+        );
+
+        let file_name = format!("{}.md", sanitize_filename(&novel_name));
+        let file_path = target_path.join(&file_name);
+
+        fs::write(&file_path, md_content).map_err(|e| format!("保存文件失败: {}", e))?;
+
+        return Ok(format!("成功爬取单章/短篇小说并保存至: {}", file_path.display()));
+    }
+
     let book_id_match = Regex::new(r"/page/(\d+)").unwrap().captures(url);
     let book_id = match book_id_match {
         Some(cap) => cap[1].to_string(),
-        None => return Err("URL格式不正确，无法提取小说ID".to_string()),
+        None => return Err("URL格式不正确，无法提取小说ID或章节ID".to_string()),
     };
 
     // Fetch the main page
