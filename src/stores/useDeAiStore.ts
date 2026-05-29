@@ -24,8 +24,6 @@ interface DeAiState {
   removerRun: AgentRunState;
   selectedDetectorReferences: string[];
   selectedHistoricalVersions: string[];
-  isAutoLooping: boolean;
-  autoLoopCount: number;
   setSelectedWorkFile: (file: string | null) => void;
   setSelectedReferenceFile: (file: string | null) => void;
   setActivePreviewFile: (file: string | null) => void;
@@ -43,8 +41,6 @@ interface DeAiState {
   setRemoverRun: (run: AgentRunState) => void;
   setSelectedDetectorReferences: (references: string[] | ((references: string[]) => string[])) => void;
   setSelectedHistoricalVersions: (versions: string[] | ((versions: string[]) => string[])) => void;
-  setIsAutoLooping: (isAutoLooping: boolean) => void;
-  setAutoLoopCount: (count: number) => void;
 }
 
 import { persist } from 'zustand/middleware';
@@ -69,8 +65,6 @@ export const useDeAiStore = create<DeAiState>()(
       removerRun: { runId: null, messageId: null },
       selectedDetectorReferences: [],
       selectedHistoricalVersions: [],
-      isAutoLooping: false,
-      autoLoopCount: 0,
       setSelectedWorkFile: (file) => set({ selectedWorkFile: file, selectedReferenceFile: null, activePreviewFile: file, activeVersionId: null, versions: [], suggestion: null, aiScore: null, parsedScoreResult: null }),
       setSelectedReferenceFile: (file) => set({ selectedWorkFile: null, selectedReferenceFile: file, activePreviewFile: file, activeVersionId: null, versions: [], suggestion: null, aiScore: null, parsedScoreResult: null }),
       setActivePreviewFile: (file) => set({ activePreviewFile: file }),
@@ -96,8 +90,6 @@ export const useDeAiStore = create<DeAiState>()(
       setSelectedHistoricalVersions: (versions) => set((state) => ({
         selectedHistoricalVersions: typeof versions === 'function' ? versions(state.selectedHistoricalVersions) : versions,
       })),
-      setIsAutoLooping: (isAutoLooping) => set({ isAutoLooping }),
-      setAutoLoopCount: (autoLoopCount) => set({ autoLoopCount }),
     }),
     {
       name: 'museai-deai-storage',

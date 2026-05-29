@@ -556,7 +556,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
           className={agentId === 'detector' ? '' : 'agent-composer__box'}
           style={agentId === 'detector' ? { position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } : { position: 'relative' }}
         >
-          {hasStarted && agentId !== 'detector' && (
+          {hasStarted && agentId !== 'detector' ? (
             <Input.TextArea
               className="agent-composer__textarea"
               autoSize={{ minRows: 1, maxRows: 8 }}
@@ -571,7 +571,9 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
               placeholder="与 Agent 对话，或按 Cmd/Ctrl + Enter 发送..."
               value={input}
             />
-          )}
+          ) : agentId !== 'detector' ? (
+            <div style={{ height: 24 }} />
+          ) : null}
           <div className="agent-composer__actions" style={agentId === 'detector' ? { width: '100%', padding: 0 } : {}}>
             {footerLeft}
             <div className="agent-send-cluster">
