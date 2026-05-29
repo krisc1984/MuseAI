@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Message } from './useAgentStore';
+import { Message, AgentSessionSummary } from './useAgentStore';
 
 interface AgentRunState {
   runId: string | null;
@@ -37,6 +37,10 @@ interface OutlineState {
   assessmentRun: AgentRunState;
   creationRun: AgentRunState;
   
+  sessionId: string;
+  sessionTitle: string;
+  sessions: AgentSessionSummary[];
+  
   setSelectedOutlineFile: (file: string | null) => void;
   setActivePreviewFile: (file: string | null) => void;
   setActiveVersionId: (id: string | null) => void;
@@ -66,6 +70,11 @@ interface OutlineState {
   
   setAssessmentRun: (run: AgentRunState) => void;
   setCreationRun: (run: AgentRunState) => void;
+  
+  setSessionId: (id: string) => void;
+  setSessionTitle: (title: string) => void;
+  setSessions: (sessions: AgentSessionSummary[]) => void;
+  createNewSession: () => void;
 }
 
 import { persist } from 'zustand/middleware';
@@ -102,6 +111,10 @@ export const useOutlineStore = create<OutlineState>()(
       
       assessmentRun: { runId: null, messageId: null },
       creationRun: { runId: null, messageId: null },
+      
+      sessionId: `outline-${crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`}`,
+      sessionTitle: '新对话',
+      sessions: [],
       
       setSelectedOutlineFile: (file) => set({ 
         selectedOutlineFile: file, 
@@ -150,6 +163,21 @@ export const useOutlineStore = create<OutlineState>()(
       
       setAssessmentRun: (assessmentRun) => set({ assessmentRun }),
       setCreationRun: (creationRun) => set({ creationRun }),
+      
+      setSessionId: (sessionId) => set({ sessionId }),
+      setSessionTitle: (sessionTitle) => set({ sessionTitle }),
+      setSessions: (sessions) => set({ sessions }),
+      createNewSession: () => set(() => ({
+        activeRun: { runId: null, messageId: null },
+        creationMessages: [],
+        creationInput: '',
+        isCreationStreaming: false,
+        creationExpandedBlocks: {},
+        creationTodos: [],
+        isCreationTodoOpen: false,
+        sessionId: `outline-${crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`}`,
+        sessionTitle: '新对话',
+      })),
     }),
     {
       name: 'museai-outline-storage',

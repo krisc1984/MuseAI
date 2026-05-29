@@ -10,7 +10,10 @@ use crate::utils::*;
 use crate::ActiveStreams;
 
 #[tauri::command]
-pub fn list_agent_sessions(app: AppHandle) -> Result<Vec<AgentSessionSummary>, String> {
+pub fn list_agent_sessions(
+    app: AppHandle,
+    prefix: Option<String>,
+) -> Result<Vec<AgentSessionSummary>, String> {
     let dir = agent_sessions_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
@@ -29,6 +32,11 @@ pub fn list_agent_sessions(app: AppHandle) -> Result<Vec<AgentSessionSummary>, S
         let Ok(record) = serde_json::from_str::<AgentSessionRecord>(&text) else {
             continue;
         };
+        if let Some(ref p) = prefix {
+            if !record.id.starts_with(p) {
+                continue;
+            }
+        }
         summaries.push(AgentSessionSummary {
             id: record.id,
             title: record.title,

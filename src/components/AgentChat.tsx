@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, Tooltip, Dropdown, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Empty } from 'antd';
-import { BulbOutlined, CloseOutlined, HistoryOutlined, PlusCircleOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { BulbOutlined, CloseOutlined, HistoryOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
@@ -707,8 +707,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
           <h3>{title}</h3>
         </div>
         <div className="agent-chat__header-actions">
-          <Tooltip title="新建 Session">
-            <Button type="text" icon={<PlusCircleOutlined />} onClick={createNewSession} />
+          <Tooltip title="清除当前上下文">
+            <Button type="text" icon={<ReloadOutlined />} onClick={createNewSession} />
           </Tooltip>
           <Dropdown
             menu={{

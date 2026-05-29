@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Input } from 'antd';
-import { BulbOutlined, InfoCircleOutlined, PlayCircleOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined } from '@ant-design/icons';
+import { Button, Tooltip, Input, Dropdown } from 'antd';
+import { BulbOutlined, CloseOutlined, HistoryOutlined, InfoCircleOutlined, PlayCircleOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSettingsStore } from '../stores/useSettingsStore';
-import { Message, AgentToolEntry } from '../stores/useAgentStore';
+import { Message, AgentToolEntry, AgentSessionSummary, AgentSessionRecord } from '../stores/useAgentStore';
 
 interface ChatStreamEvent {
   runId: string;
@@ -37,6 +37,7 @@ interface DeAiAgentChatProps {
   onDone?: (lastAgentMessage: string) => void | string | Promise<void | string>;
   isRunning?: boolean;
   onRunningChange?: (running: boolean) => void;
+  onClose?: () => void;
 }
 
 interface StartOverride {
@@ -61,7 +62,8 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
   autoTriggerContent,
   onDone,
   isRunning,
-  onRunningChange
+  onRunningChange,
+  onClose,
 }) => {
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string, boolean>>({});
   const stopRequestedRef = useRef(false);
@@ -75,6 +77,13 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
   const [fullSystemPrompt, setFullSystemPrompt] = useState('');
   const [input, setInput] = useState('');
   const hasStarted = messages.length > 0;
+
+  const isRemover = agentId === 'remover';
+  const [sessionId, setSessionId] = useState(() => `deai-${crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`}`);
+  const [sessionTitle, setSessionTitle] = useState('新对话');
+  const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
+  const sessionIdRef = useRef(sessionId);
+  const sessionTitleRef = useRef(sessionTitle);
 
   useEffect(() => {
     const build = async () => {
@@ -96,6 +105,9 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { onDoneRef.current = onDone; }, [onDone]);
   useEffect(() => { onRunningChangeRef.current = onRunningChange; }, [onRunningChange]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   const setSyncedMessages = (updater: Message[] | ((messages: Message[]) => Message[])) => {
     setMessages((prev) => {
@@ -104,6 +116,78 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
       return next;
     });
   };
+
+  const refreshSessions = async () => {
+    if (!isRemover) return;
+    try {
+      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'deai-' });
+      setSessions(summaries);
+    } catch (err) {
+      console.error('读取历史会话失败:', err);
+    }
+  };
+
+  const saveCurrentSession = async () => {
+    if (!isRemover) return;
+    const userMessages = messagesRef.current.filter((message) => message.role === 'user');
+    if (userMessages.length === 0) {
+      return;
+    }
+    try {
+      await invoke<AgentSessionSummary>('save_agent_session', {
+        session: {
+          id: sessionIdRef.current,
+          title: sessionTitleRef.current,
+          savedAt: 0,
+          messages: messagesRef.current,
+          selectedReferenceFiles: [],
+          selectedOutlineFile: null,
+          todos: [],
+        },
+      });
+      await refreshSessions();
+    } catch (err) {
+      console.error('保存会话失败:', err);
+    }
+  };
+
+  const openSession = async (id: string) => {
+    try {
+      const session = await invoke<AgentSessionRecord>('load_agent_session', { id });
+      activeRunRef.current = { runId: null, messageId: null };
+      setActiveRun({ runId: null, messageId: null });
+      setSessionId(session.id);
+      setSessionTitle(session.title);
+      setMessages(session.messages);
+      setExpandedBlocks({});
+      setInput('');
+      onRunningChangeRef.current?.(false);
+      if (chatHistoryRef.current) {
+        chatHistoryRef.current.scrollTop = chatHistoryRef.current.scrollHeight;
+      }
+    } catch (err) {
+      console.error('打开历史会话失败:', err);
+    }
+  };
+
+  const createNewSession = () => {
+    if (!isRemover) {
+      setMessages([]);
+      return;
+    }
+    setActiveRun({ runId: null, messageId: null });
+    setMessages([]);
+    setInput('');
+    setExpandedBlocks({});
+    setSessionId(`deai-${crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`}`);
+    setSessionTitle('新对话');
+  };
+
+  useEffect(() => {
+    if (isRemover) {
+      void refreshSessions();
+    }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -220,6 +304,9 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
         activeRunRef.current = { runId: null, messageId: null };
         setActiveRun({ runId: null, messageId: null });
         onRunningChangeRef.current?.(false);
+        window.setTimeout(() => {
+          void saveCurrentSession();
+        }, 0);
         const lastMsg = messagesRef.current.find(m => m.id === activeRun.messageId);
         if (lastMsg && onDoneRef.current) {
           const result = onDoneRef.current(lastMsg.content);
@@ -386,9 +473,13 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
 
   const handleRefresh = async () => {
     await handleStop();
-    setMessages([]);
-    setExpandedBlocks({});
-    setInput('');
+    if (isRemover) {
+      createNewSession();
+    } else {
+      setMessages([]);
+      setExpandedBlocks({});
+      setInput('');
+    }
   };
 
   const toggleBlock = (id: string) => {
@@ -449,18 +540,49 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
 
   return (
     <div className="agent-chat" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div className="agent-chat__header" style={{ padding: '8px 12px', borderBottom: '1px solid #e8e8e8' }}>
+      <div className="agent-chat__header">
         <div className="agent-chat__title">
-          <RobotOutlined style={{ color: '#d97757' }} />
-          <h3 style={{ fontSize: 14, margin: 0, marginLeft: 8 }}>{title}</h3>
+          <RobotOutlined />
+          <h3>{title}</h3>
         </div>
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={handleRefresh}
-          size="small"
-          title="清除当前上下文"
-          type="text"
-        />
+        <div className="agent-chat__header-actions">
+          <Tooltip title="清除当前上下文">
+            <Button type="text" icon={<ReloadOutlined />} onClick={handleRefresh} />
+          </Tooltip>
+          {isRemover && (
+            <Dropdown
+              menu={{
+                items: sessions.length > 0
+                  ? sessions.map((session) => ({
+                      key: session.id,
+                      label: (
+                        <div className="agent-session-menu-item">
+                          <strong>{session.title}</strong>
+                          <span>{formatSavedAt(session.savedAt)}</span>
+                        </div>
+                      ),
+                    }))
+                  : [{ key: 'empty', disabled: true, label: '暂无历史 Session' }],
+                onClick: ({ key }) => {
+                  if (key !== 'empty') {
+                    void openSession(String(key));
+                  }
+                },
+              }}
+              placement="bottomRight"
+              trigger={['click']}
+            >
+              <Tooltip title="历史 Session">
+                <Button type="text" icon={<HistoryOutlined />} onClick={() => void refreshSessions()} />
+              </Tooltip>
+            </Dropdown>
+          )}
+          {onClose && (
+            <Tooltip title="隐藏 Agent">
+              <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
+            </Tooltip>
+          )}
+        </div>
       </div>
 
       <div ref={chatHistoryRef} className="agent-chat__history" style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
@@ -745,6 +867,18 @@ function buildEstimatedSystemPrompt(
   ];
   lines.push(workspaceLines.join('\n'));
   return lines.filter(Boolean).join('\n\n');
+}
+
+function formatSavedAt(value: number) {
+  if (!value) {
+    return '未保存';
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
 }
 
 export default DeAiAgentChat;

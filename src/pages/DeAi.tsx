@@ -5,7 +5,7 @@ import DeAiAgentChat from '../components/DeAiAgentChat';
 import { useDeAiStore } from '../stores/useDeAiStore';
 import { defaultDeAiDetectorPrompt, defaultDeAiRemoverPrompt, useSettingsStore } from '../stores/useSettingsStore';
 import { Button, Empty, Modal, Popconfirm, Progress, Select, Tree, Typography, message, Popover } from 'antd';
-import { DeleteOutlined, SettingOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { DeleteOutlined, SettingOutlined, CheckCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { ScoreDetailsModal } from '../components/ScoreDetailsModal';
 
@@ -76,6 +76,8 @@ const DeAi: React.FC = () => {
     setSelectedDetectorReferences,
     isDetectorOpen,
     setIsDetectorOpen,
+    isRemoverVisible,
+    setIsRemoverVisible,
   } = useDeAiStore();
 
   const [detectorInput, setDetectorInput] = useState<string | undefined>();
@@ -636,113 +638,130 @@ const DeAi: React.FC = () => {
               </Button>
             </div>
           ) : <span />}
-          {selectedWorkFile && (
-            <div className="de-ai-editor-toolbar__meta">
-              <Select
-                className="de-ai-version-select"
-                style={{ width: 240 }}
-                value={activeVersionId || 'original'}
-                onChange={(val) => {
-                  if (val === 'original') {
-                    setActiveVersionId(null);
-                    syncActiveVersionResult(null);
-                  } else {
-                    setActiveVersionId(val);
-                    const v = versions.find(x => x.id === val);
-                    syncActiveVersionResult(v ?? null);
-                  }
-                }}
-                options={[
-                  { value: 'original', label: '原文件' },
-                  ...versions.map(v => {
-                    let versionDisplayScore = v.aiScore;
-                    if (v.suggestion) {
-                      try {
-                        const p = JSON.parse(v.suggestion);
-                        const subScoreKeys = ['可预测的节奏', '功能性用词', '机械式写作', '可预测的句法', '缺乏创造性语法', '实用主义词汇', '单调的句法', '机械般的正式感'];
-                        let sum = 0;
-                        let hasSub = false;
-                        for (const k of subScoreKeys) {
-                          if (typeof p[k] === 'number') {
-                            sum += p[k];
-                            hasSub = true;
-                          }
-                        }
-                        if (hasSub) versionDisplayScore = Number(sum.toFixed(1));
-                        else if (typeof p.ai_score === 'number') versionDisplayScore = Number(p.ai_score.toFixed(1));
-                      } catch(e) {}
-                    }
-                    return {
-                      value: v.id,
-                      label: `版本 ${new Date(v.timestamp).toLocaleString()} ${versionDisplayScore != null ? `(AI味: ${versionDisplayScore})` : ''}`
-                    };
-                  })
-                ]}
-              />
-              {activeVersionId && (
-                <Popconfirm title="确定删除该版本？" onConfirm={async () => {
-                  try {
-                    await invoke('delete_file_version', { path: selectedWorkFile, versionId: activeVersionId });
-                    setVersions(versions.filter(v => v.id !== activeVersionId));
-                    setActiveVersionId(null);
-                    syncActiveVersionResult(null);
-                    message.success('已删除版本');
-                  } catch (e) {
-                    message.error(`删除失败: ${e}`);
-                  }
-                }}>
-                  <Button className="de-ai-delete-version" type="text" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
-              )}
-              <Popover
-                placement="bottomRight"
-                content={
-                  parsedAssessment ? (
-                    <div style={{ minWidth: 200 }}>
-                      {aiScoreFields.map(field => (
-                        <div key={field.name} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span>{field.name}</span>
-                          <span>{typeof parsedAssessment[field.name] === 'number' ? parsedAssessment[field.name] : 0}/{field.max}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ padding: '8px 16px', color: '#999' }}>暂无评估结果</div>
-                  )
-                }
-              >
-                <div 
-                  className="de-ai-score-pill" 
-                  aria-label={`AI味评分${displayScore === null ? '暂无' : displayScore}`}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => {
-                    if (parsedAssessment) {
-                      setIsScoreModalOpen(true);
+          <div className="de-ai-editor-toolbar__meta">
+            {selectedWorkFile && (
+              <>
+                <Select
+                  className="de-ai-version-select"
+                  style={{ width: 240 }}
+                  value={activeVersionId || 'original'}
+                  onChange={(val) => {
+                    if (val === 'original') {
+                      setActiveVersionId(null);
+                      syncActiveVersionResult(null);
+                    } else {
+                      setActiveVersionId(val);
+                      const v = versions.find(x => x.id === val);
+                      syncActiveVersionResult(v ?? null);
                     }
                   }}
+                  options={[
+                    { value: 'original', label: '原文件' },
+                    ...versions.map(v => {
+                      let versionDisplayScore = v.aiScore;
+                      if (v.suggestion) {
+                        try {
+                          const p = JSON.parse(v.suggestion);
+                          const subScoreKeys = ['可预测的节奏', '功能性用词', '机械式写作', '可预测的句法', '缺乏创造性语法', '实用主义词汇', '单调的句法', '机械般的正式感'];
+                          let sum = 0;
+                          let hasSub = false;
+                          for (const k of subScoreKeys) {
+                            if (typeof p[k] === 'number') {
+                              sum += p[k];
+                              hasSub = true;
+                            }
+                          }
+                          if (hasSub) versionDisplayScore = Number(sum.toFixed(1));
+                          else if (typeof p.ai_score === 'number') versionDisplayScore = Number(p.ai_score.toFixed(1));
+                        } catch(e) {}
+                      }
+                      return {
+                        value: v.id,
+                        label: `版本 ${new Date(v.timestamp).toLocaleString()} ${versionDisplayScore != null ? `(AI味: ${versionDisplayScore})` : ''}`
+                      };
+                    })
+                  ]}
+                />
+                {activeVersionId && (
+                  <Popconfirm title="确定删除该版本？" onConfirm={async () => {
+                    try {
+                      await invoke('delete_file_version', { path: selectedWorkFile, versionId: activeVersionId });
+                      setVersions(versions.filter(v => v.id !== activeVersionId));
+                      setActiveVersionId(null);
+                      syncActiveVersionResult(null);
+                      message.success('已删除版本');
+                    } catch (e) {
+                      message.error(`删除失败: ${e}`);
+                    }
+                  }}>
+                    <Button className="de-ai-delete-version" type="text" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                )}
+                <Popover
+                  placement="bottomRight"
+                  content={
+                    parsedAssessment ? (
+                      <div style={{ minWidth: 200 }}>
+                        {aiScoreFields.map(field => (
+                          <div key={field.name} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span>{field.name}</span>
+                            <span>{typeof parsedAssessment[field.name] === 'number' ? parsedAssessment[field.name] : 0}/{field.max}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ padding: '8px 16px', color: '#999' }}>暂无评估结果</div>
+                    )
+                  }
                 >
-                  <span className="de-ai-score-pill__label">AI味</span>
-                  <Progress 
-                    type="circle" 
-                    percent={displayScore ?? 0} 
-                    size={30} 
-                    status={displayScore === null ? 'normal' : (displayScore > 50 ? 'exception' : (displayScore > 30 ? 'normal' : 'success'))} 
-                    format={() => displayScore === null ? '--' : `${displayScore}`}
-                    strokeColor={displayScore === null ? '#e8e8e8' : undefined}
-                  />
-                </div>
-              </Popover>
-              <ScoreDetailsModal 
-                isOpen={isScoreModalOpen} 
-                onClose={() => setIsScoreModalOpen(false)} 
-                parsedAssessment={parsedAssessment} 
-                totalScore={displayScore ?? 0}
-                scoreFields={aiScoreFields}
-                title="AI味综合评分"
-                chartTitle="AI特征多维雷达图"
-              />
-            </div>
-          )}
+                  <div 
+                    className="de-ai-score-pill" 
+                    aria-label={`AI味评分${displayScore === null ? '暂无' : displayScore}`}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => {
+                      if (parsedAssessment) {
+                        setIsScoreModalOpen(true);
+                      }
+                    }}
+                  >
+                    <span className="de-ai-score-pill__label">AI味</span>
+                    <Progress 
+                      type="circle" 
+                      percent={displayScore ?? 0} 
+                      size={30} 
+                      status={displayScore === null ? 'normal' : (displayScore > 50 ? 'exception' : (displayScore > 30 ? 'normal' : 'success'))} 
+                      format={() => displayScore === null ? '--' : `${displayScore}`}
+                      strokeColor={displayScore === null ? '#e8e8e8' : undefined}
+                    />
+                  </div>
+                </Popover>
+                <ScoreDetailsModal 
+                  isOpen={isScoreModalOpen} 
+                  onClose={() => setIsScoreModalOpen(false)} 
+                  parsedAssessment={parsedAssessment} 
+                  totalScore={displayScore ?? 0}
+                  scoreFields={aiScoreFields}
+                  title="AI味综合评分"
+                  chartTitle="AI特征多维雷达图"
+                />
+              </>
+            )}
+            {!isRemoverVisible && (
+              <Button
+                type="primary"
+                icon={<RobotOutlined />}
+                onClick={() => setIsRemoverVisible(true)}
+                style={{
+                  background: '#d97757',
+                  border: 'none',
+                  boxShadow: '0 4px 12px rgba(217, 119, 87, 0.2)',
+                  flexShrink: 0
+                }}
+              >
+                打开 Agent
+              </Button>
+            )}
+          </div>
         </div>
         <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
           <MarkdownEditor
@@ -784,56 +803,59 @@ const DeAi: React.FC = () => {
           </div>
         )}
       </div>
-      <div style={{ width: agentWidth, minWidth: agentWidth, borderLeft: '1px solid rgba(0, 0, 0, 0.04)', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', background: '#fff' }}>
-        <div
-          aria-label="调整 Agent 宽度"
-          aria-orientation="vertical"
-          role="separator"
-          onMouseDown={() => setIsResizingAgent(true)}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: -3,
-            width: 6,
-            height: '100%',
-            cursor: 'col-resize',
-            zIndex: 2,
-          }}
-        />
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <DeAiAgentChat 
-            title="去除AI味 Agent"
-            agentId="remover"
-            systemPrompt={deAiRemoverPrompt}
-            allowedTools={['read', 'edit', 'write']}
-            startContent={removerStartContent}
-            onBeforeStart={handleRemoverBeforeStart}
-            startDisabled={!selectedWorkFile || !persistedSuggestion}
-            onStartBlocked={() => {
-              message.warning('请先完成AI味检测，获得修改意见后再启动去除AI味Agent');
+      {isRemoverVisible && (
+        <div style={{ width: agentWidth, minWidth: agentWidth, borderLeft: '1px solid rgba(0, 0, 0, 0.04)', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', background: '#fff' }}>
+          <div
+            aria-label="调整 Agent 宽度"
+            aria-orientation="vertical"
+            role="separator"
+            onMouseDown={() => setIsResizingAgent(true)}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: -3,
+              width: 6,
+              height: '100%',
+              cursor: 'col-resize',
+              zIndex: 2,
             }}
-            footerLeft={
-              <Button
-                aria-label="Agent 设置"
-                className="de-ai-agent-settings-button"
-                icon={<SettingOutlined />}
-                onClick={() => setIsRemoverSettingsOpen(true)}
-                shape="circle"
-                title="Agent 设置"
-                type={removerSelectedHistoricalVersions.length > 0 ? 'primary' : 'default'}
-              />
-            }
-            messages={removerMessages}
-            setMessages={setRemoverMessages}
-            activeRun={removerRun}
-            setActiveRun={setRemoverRun}
-            onRunningChange={setRemoverRunning}
-            isRunning={removerRunning}
-            autoTriggerContent={removerInput}
-            onDone={handleRemoverDone}
           />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <DeAiAgentChat 
+              title="去除AI味 Agent"
+              agentId="remover"
+              systemPrompt={deAiRemoverPrompt}
+              allowedTools={['read', 'edit', 'write']}
+              startContent={removerStartContent}
+              onBeforeStart={handleRemoverBeforeStart}
+              startDisabled={!selectedWorkFile || !persistedSuggestion}
+              onStartBlocked={() => {
+                message.warning('请先完成AI味检测，获得修改意见后再启动去除AI味Agent');
+              }}
+              footerLeft={
+                <Button
+                  aria-label="Agent 设置"
+                  className="de-ai-agent-settings-button"
+                  icon={<SettingOutlined />}
+                  onClick={() => setIsRemoverSettingsOpen(true)}
+                  shape="circle"
+                  title="Agent 设置"
+                  type={removerSelectedHistoricalVersions.length > 0 ? 'primary' : 'default'}
+                />
+              }
+              messages={removerMessages}
+              setMessages={setRemoverMessages}
+              activeRun={removerRun}
+              setActiveRun={setRemoverRun}
+              onRunningChange={setRemoverRunning}
+              isRunning={removerRunning}
+              autoTriggerContent={removerInput}
+              onDone={handleRemoverDone}
+              onClose={() => setIsRemoverVisible(false)}
+            />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Select, Empty } from 'antd';
-import { BulbOutlined, CloseOutlined, InfoCircleOutlined, PlusCircleOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { Button, Tooltip, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Select, Empty, Dropdown } from 'antd';
+import { BulbOutlined, CloseOutlined, HistoryOutlined, InfoCircleOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
@@ -13,6 +13,8 @@ import {
   AgentTodo, 
   SkillDefinition,
   ThinkingBlock,
+  AgentSessionSummary,
+  AgentSessionRecord,
 } from '../stores/useAgentStore';
 import { useOutlineStore } from '../stores/useOutlineStore';
 
@@ -60,6 +62,9 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
     creationSelectedOutlineFile: selectedOutlineFile, setCreationSelectedOutlineFile: setAgentSelectedOutlineFile,
     creationActiveVersionId: activeVersionId, setCreationActiveVersionId: setActiveVersionId,
     creationVersions: versions,
+    sessionId, setSessionId,
+    sessionTitle, setSessionTitle,
+    sessions, setSessions,
   } = useOutlineStore();
   const { skills, setSkills } = useAgentStore();
 
@@ -73,6 +78,8 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
   const messagesRef = useRef(messages);
   const selectedReferenceFilesRef = useRef(selectedReferenceFiles);
   const todosRef = useRef(todos);
+  const sessionIdRef = useRef(sessionId);
+  const sessionTitleRef = useRef(sessionTitle);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [allReferenceFiles, setAllReferenceFiles] = useState<string[]>([]);
@@ -104,9 +111,12 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
 
   React.useEffect(() => {
     invoke<SkillDefinition[]>('get_skills').then(setSkills).catch(console.error);
+    void refreshSessions();
     invoke<string>('get_workspace_dir', { dirType: 'outline' }).then(async (dir) => {
       setOutlineDir(dir);
       const fetchTree = async (path: string): Promise<any[]> => {
@@ -131,6 +141,57 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
   useEffect(() => {
     selectedReferenceFilesRef.current = selectedReferenceFiles;
   }, [selectedReferenceFiles]);
+
+  const refreshSessions = async () => {
+    try {
+      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'outline-' });
+      setSessions(summaries);
+    } catch (err) {
+      console.error('读取历史会话失败:', err);
+    }
+  };
+
+  const saveCurrentSession = async () => {
+    const userMessages = messagesRef.current.filter((message) => message.role === 'user');
+    if (userMessages.length === 0) {
+      return;
+    }
+    try {
+      await invoke<AgentSessionSummary>('save_agent_session', {
+        session: {
+          id: sessionIdRef.current,
+          title: sessionTitleRef.current,
+          savedAt: 0,
+          messages: messagesRef.current,
+          selectedReferenceFiles: selectedReferenceFilesRef.current,
+          selectedOutlineFile: null,
+          todos: todosRef.current,
+        },
+      });
+      await refreshSessions();
+    } catch (err) {
+      console.error('保存会话失败:', err);
+    }
+  };
+
+  const openSession = async (id: string) => {
+    try {
+      const session = await invoke<AgentSessionRecord>('load_agent_session', { id });
+      activeRunRef.current = { runId: null, messageId: null };
+      setActiveRun({ runId: null, messageId: null });
+      setSessionId(session.id);
+      setSessionTitle(session.title);
+      setMessages(session.messages);
+      setSelectedReferenceFiles(session.selectedReferenceFiles ?? []);
+      setTodos(session.todos ?? []);
+      setIsTodoOpen(false);
+      setIsStreaming(false);
+      setInput('');
+      scrollToBottomOnce();
+    } catch (err) {
+      console.error('打开历史会话失败:', err);
+    }
+  };
 
 
 
@@ -262,6 +323,9 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
         activeRunRef.current = { runId: null, messageId: null };
         setActiveRun({ runId: null, messageId: null });
         setIsStreaming(false);
+        window.setTimeout(() => {
+          void saveCurrentSession();
+        }, 0);
       }
     }).then((fn) => {
       unlistenFn = fn;
@@ -363,6 +427,32 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
   const startAgent = async (finalInputText: string) => {
     let { creationSelectedOutlineFile: selectedOutlineFile, creationActiveVersionId: activeVersionId } = useOutlineStore.getState();
     const isFirstUserMessage = !messages.some((message) => message.role === 'user');
+
+    if (isFirstUserMessage) {
+      const fallbackTitle = summarizeSessionTitle(finalInputText);
+      sessionTitleRef.current = fallbackTitle;
+      setSessionTitle(fallbackTitle);
+
+      invoke<string>('summarize_text', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: settings.temperature,
+          maxOutputTokens: 64,
+          text: finalInputText,
+        },
+      }).then((generatedTitle) => {
+        const currentId = sessionIdRef.current;
+        sessionTitleRef.current = generatedTitle;
+        setSessionTitle(generatedTitle);
+        void invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
+        void refreshSessions();
+      }).catch(() => {
+        // Keep fallback title on generation failure
+      });
+    }
 
     if (isFirstUserMessage && selectedOutlineFile) {
       try {
@@ -710,9 +800,35 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
           <h3>{title}</h3>
         </div>
         <div className="agent-chat__header-actions">
-          <Tooltip title="清除当前对话">
-            <Button type="text" icon={<PlusCircleOutlined />} onClick={() => setMessages([])} />
+          <Tooltip title="清除当前上下文">
+            <Button type="text" icon={<ReloadOutlined />} onClick={() => { setMessages([]); setSessionTitle('新对话'); }} />
           </Tooltip>
+          <Dropdown
+            menu={{
+              items: sessions.length > 0
+                ? sessions.map((session) => ({
+                    key: session.id,
+                    label: (
+                      <div className="agent-session-menu-item">
+                        <strong>{session.title}</strong>
+                        <span>{formatSavedAt(session.savedAt)}</span>
+                      </div>
+                    ),
+                  }))
+                : [{ key: 'empty', disabled: true, label: '暂无历史 Session' }],
+              onClick: ({ key }) => {
+                if (key !== 'empty') {
+                  void openSession(String(key));
+                }
+              },
+            }}
+            placement="bottomRight"
+            trigger={['click']}
+          >
+            <Tooltip title="历史 Session">
+              <Button type="text" icon={<HistoryOutlined />} onClick={() => void refreshSessions()} />
+            </Tooltip>
+          </Dropdown>
           {onClose && (
             <Tooltip title="隐藏 Agent">
               <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
@@ -1154,6 +1270,26 @@ function buildEstimatedSystemPrompt(
 
   lines.push(workspaceLines.join('\n'), systemLines.join('\n'));
   return lines.filter(Boolean).join('\n\n');
+}
+
+function summarizeSessionTitle(firstMessage: string) {
+  const normalized = firstMessage.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '新对话';
+  }
+  return normalized.length > 24 ? `${normalized.slice(0, 24)}...` : normalized;
+}
+
+function formatSavedAt(value: number) {
+  if (!value) {
+    return '未保存';
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
 }
 
 export default OutlineCreationAgentChat;
