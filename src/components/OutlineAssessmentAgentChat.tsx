@@ -73,6 +73,7 @@ const OutlineAssessmentAgentChat: React.FC<OutlineAssessmentAgentChatProps> = ({
   const activeRunRef = useRef(activeRun);
   const onDoneRef = useRef(onDone);
   const onRunningChangeRef = useRef(onRunningChange);
+  const accumulatedContentRef = useRef('');
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const settings = useSettingsStore();
   const [fullSystemPrompt, setFullSystemPrompt] = useState('');
@@ -121,6 +122,7 @@ const OutlineAssessmentAgentChat: React.FC<OutlineAssessmentAgentChatProps> = ({
 
       if (payload.eventType === 'delta' && payload.delta) {
         currentThinkingIdRef.current = null;
+        accumulatedContentRef.current += payload.delta;
         setSyncedMessages((prev) => prev.map((msg) => (
           msg.id === activeRun.messageId
             ? { ...msg, content: msg.content + payload.delta }
@@ -222,9 +224,8 @@ const OutlineAssessmentAgentChat: React.FC<OutlineAssessmentAgentChatProps> = ({
         activeRunRef.current = { runId: null, messageId: null };
         setActiveRun({ runId: null, messageId: null });
         onRunningChangeRef.current?.(false);
-        const lastMsg = messagesRef.current.find(m => m.id === activeRun.messageId);
-        if (lastMsg && onDoneRef.current) {
-          const result = onDoneRef.current(lastMsg.content);
+        if (onDoneRef.current) {
+          const result = onDoneRef.current(accumulatedContentRef.current);
           const handleResult = (res: any) => {
             if (typeof res === 'string' && res.trim() !== '') {
               // Using timeout to ensure state is clean before next send
@@ -314,6 +315,7 @@ const OutlineAssessmentAgentChat: React.FC<OutlineAssessmentAgentChatProps> = ({
     if (shouldResetContext) {
       setExpandedBlocks({});
     }
+    accumulatedContentRef.current = '';
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
     onRunningChange?.(true);

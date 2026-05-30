@@ -552,7 +552,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
           workspacePath: outlineDir,
           messages: buildModelMessages(messages.concat(userMessage), userMessage.id, mentionedSkills),
           selectedReferenceFiles: selectedReferenceFiles,
-          allowedTools: ['read', 'write', 'edit', 'grep', 'glob', 'skill'],
+          allowedTools: ['read', 'write', 'edit', 'grep', 'glob', 'skill', 'bash'],
         },
       });
       activeRunRef.current = { runId, messageId: agentMessageId };

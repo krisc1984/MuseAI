@@ -73,6 +73,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
   const onDoneRef = useRef(onDone);
   const onRunningChangeRef = useRef(onRunningChange);
   const chatHistoryRef = useRef<HTMLDivElement>(null);
+  const accumulatedContentRef = useRef('');
   const settings = useSettingsStore();
   const [fullSystemPrompt, setFullSystemPrompt] = useState('');
   const [input, setInput] = useState('');
@@ -217,6 +218,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
 
       if (payload.eventType === 'delta' && payload.delta) {
         currentThinkingIdRef.current = null;
+        accumulatedContentRef.current += payload.delta;
         setSyncedMessages((prev) => prev.map((msg) => (
           msg.id === activeRun.messageId
             ? { ...msg, content: msg.content + payload.delta }
@@ -321,9 +323,8 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
         window.setTimeout(() => {
           void saveCurrentSession();
         }, 0);
-        const lastMsg = messagesRef.current.find(m => m.id === activeRun.messageId);
-        if (lastMsg && onDoneRef.current) {
-          const result = onDoneRef.current(lastMsg.content);
+        if (onDoneRef.current) {
+          const result = onDoneRef.current(accumulatedContentRef.current);
           const handleResult = (res: any) => {
             if (typeof res === 'string' && res.trim() !== '') {
               // Using timeout to ensure state is clean before next send
@@ -415,6 +416,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
     if (shouldResetContext) {
       setExpandedBlocks({});
     }
+    accumulatedContentRef.current = '';
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
     setInput('');
