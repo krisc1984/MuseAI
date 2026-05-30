@@ -407,6 +407,14 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
       mentionedSkillNames.push('fanqie-xuanhuan-writer');
     } else if (articleTypeStr === '女频-短篇-追妻火葬场') {
       mentionedSkillNames.push('fanqie-short-zhuiqi-writer');
+    } else if (articleTypeStr === '女频-短篇-大女主') {
+      mentionedSkillNames.push('fanqie-short-danvzhu-writer');
+    } else if (articleTypeStr === '女频-短篇-系统穿越') {
+      mentionedSkillNames.push('fanqie-short-xitong-writer');
+    } else if (articleTypeStr === '女频-短篇-真假千金') {
+      mentionedSkillNames.push('fanqie-short-qianjin-writer');
+    } else if (articleTypeStr === '女频-短篇-规则怪谈') {
+      mentionedSkillNames.push('fanqie-short-guize-writer');
     } else if (articleTypeStr === '公众号') {
       mentionedSkillNames.push('kitt-writer');
     }
@@ -649,7 +657,13 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
                     {
                       value: '短篇',
                       label: '短篇',
-                      children: [{ value: '追妻火葬场', label: '追妻火葬场' }],
+                      children: [
+                        { value: '追妻火葬场', label: '追妻火葬场' },
+                        { value: '大女主', label: '大女主' },
+                        { value: '系统穿越', label: '系统穿越' },
+                        { value: '真假千金', label: '真假千金' },
+                        { value: '规则怪谈', label: '规则怪谈' },
+                      ],
                     },
                   ],
                 },

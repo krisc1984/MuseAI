@@ -15,6 +15,14 @@ const BUILTIN_SKILL_NAMES: &[&str] = &[
     "fanqie-short-zhuiqi-writer",
     "fanqie-xuanhuan-outline",
     "fanqie-xuanhuan-writer",
+    "fanqie-short-danvzhu-outline",
+    "fanqie-short-danvzhu-writer",
+    "fanqie-short-guize-outline",
+    "fanqie-short-guize-writer",
+    "fanqie-short-qianjin-outline",
+    "fanqie-short-qianjin-writer",
+    "fanqie-short-xitong-outline",
+    "fanqie-short-xitong-writer",
 ];
 
 static BUILTIN_SKILLS_SYNCED: OnceLock<()> = OnceLock::new();

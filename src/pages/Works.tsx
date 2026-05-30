@@ -42,7 +42,13 @@ const ARTICLE_TYPE_OPTIONS = [
       {
         value: '短篇',
         label: '短篇',
-        children: [{ value: '追妻火葬场', label: '追妻火葬场' }],
+        children: [
+          { value: '追妻火葬场', label: '追妻火葬场' },
+          { value: '大女主', label: '大女主' },
+          { value: '系统穿越', label: '系统穿越' },
+          { value: '真假千金', label: '真假千金' },
+          { value: '规则怪谈', label: '规则怪谈' },
+        ],
       },
     ],
   },
