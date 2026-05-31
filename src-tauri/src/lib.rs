@@ -185,6 +185,7 @@ pub fn run() {
             build_full_system_prompt,
             generate_background_items,
             optimize_character_memories,
+            test_llm_connection,
         ])
         .manage(ActiveStreams(Mutex::new(HashMap::new())))
         .run(tauri::generate_context!())

@@ -358,3 +358,135 @@ pub fn agent_session_path(app: &AppHandle, id: &str) -> Result<std::path::PathBu
     let safe_id = sanitize_session_id(id)?;
     Ok(agent_sessions_dir(app)?.join(format!("{}.json", safe_id)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_is_supported_content_file() {
+        assert!(is_supported_content_file(Path::new("article.md")));
+        assert!(is_supported_content_file(Path::new("notes.txt")));
+        assert!(is_supported_content_file(Path::new("image.PNG")));
+        assert!(is_supported_content_file(Path::new("photo.jpg")));
+        assert!(!is_supported_content_file(Path::new("script.py")));
+        assert!(!is_supported_content_file(Path::new("data.json")));
+        assert!(!is_supported_content_file(Path::new("no_extension")));
+    }
+
+    #[test]
+    fn test_expand_path_home() {
+        let home = std::env::var_os("HOME").expect("HOME env var should be set");
+        let result = expand_path(None, "~");
+        assert_eq!(result, PathBuf::from(&home));
+
+        let result = expand_path(None, "~/Documents");
+        assert_eq!(result, PathBuf::from(&home).join("Documents"));
+    }
+
+    #[test]
+    fn test_expand_path_absolute() {
+        let result = expand_path(None, "/usr/local/bin");
+        assert_eq!(result, PathBuf::from("/usr/local/bin"));
+    }
+
+    #[test]
+    fn test_expand_path_relative_with_base() {
+        let result = expand_path(Some("/base"), "subdir/file.txt");
+        assert_eq!(result, PathBuf::from("/base/subdir/file.txt"));
+    }
+
+    #[test]
+    fn test_normalize_tool_path() {
+        let path = Path::new("dir\\subdir\\file.txt");
+        assert_eq!(normalize_tool_path(path), "dir/subdir/file.txt");
+    }
+
+    #[test]
+    fn test_normalize_path() {
+        let path = Path::new("/a/b/../c");
+        assert_eq!(normalize_path(path), PathBuf::from("/a/c"));
+
+        let path = Path::new("/a/./b/c");
+        assert_eq!(normalize_path(path), PathBuf::from("/a/b/c"));
+    }
+
+    #[test]
+    fn test_count_lines() {
+        assert_eq!(count_lines(""), 0);
+        assert_eq!(count_lines("single"), 1);
+        assert_eq!(count_lines("line1\nline2\nline3"), 3);
+        assert_eq!(count_lines("line1\nline2\n"), 2);
+    }
+
+    #[test]
+    fn test_simple_diff() {
+        let old = "apple\nbanana";
+        let new = "apple\ncherry";
+        let diff = simple_diff(old, new);
+        assert!(diff.contains("--- before"));
+        assert!(diff.contains("+++ after"));
+        assert!(diff.contains("-banana"));
+        assert!(diff.contains("+cherry"));
+    }
+
+    #[test]
+    fn test_truncate_chars_short() {
+        let text = "short";
+        assert_eq!(truncate_chars(text, 100), "short");
+    }
+
+    #[test]
+    fn test_truncate_chars_long() {
+        let text = "a".repeat(200);
+        let result = truncate_chars(&text, 100);
+        assert!(result.starts_with("a".repeat(100).as_str()));
+        assert!(result.contains("... (truncated)"));
+    }
+
+    #[test]
+    fn test_glob_match() {
+        assert!(glob_match("*.md", "file.md"));
+        assert!(glob_match("*.rs", "main.rs"));
+        assert!(!glob_match("*.md", "file.txt"));
+        assert!(glob_match("test_*", "test_something"));
+    }
+
+    #[test]
+    fn test_extract_frontmatter_value() {
+        let body = r#"name: "Test Skill"
+description: "A test skill"
+version: "1.0.0"
+"#;
+        assert_eq!(
+            extract_frontmatter_value(body, "name"),
+            Some("Test Skill".to_string())
+        );
+        assert_eq!(
+            extract_frontmatter_value(body, "version"),
+            Some("1.0.0".to_string())
+        );
+        assert_eq!(extract_frontmatter_value(body, "missing"), None);
+    }
+
+    #[test]
+    fn test_sanitize_session_id_valid() {
+        assert_eq!(
+            sanitize_session_id("session-123").unwrap(),
+            "session-123"
+        );
+        assert_eq!(
+            sanitize_session_id("  session_456  ").unwrap(),
+            "session_456"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_session_id_invalid() {
+        assert!(sanitize_session_id("").is_err());
+        assert!(sanitize_session_id("   ").is_err());
+        assert!(sanitize_session_id("session@123").is_err());
+        assert!(sanitize_session_id("session 123").is_err());
+    }
+}

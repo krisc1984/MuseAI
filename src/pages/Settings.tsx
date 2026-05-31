@@ -1,6 +1,21 @@
 import React from 'react';
-import { Form, Input, Button, InputNumber, Divider, Typography, Select, message, Anchor, Card } from 'antd';
-import { SettingOutlined, BookOutlined, DeploymentUnitOutlined, ClearOutlined, ProfileOutlined, GlobalOutlined, MessageOutlined, CompassOutlined } from '@ant-design/icons';
+import { Form, Input, Button, InputNumber, Divider, Typography, Select, message, Anchor, Card, Modal, Space, Popconfirm } from 'antd';
+import {
+  SettingOutlined,
+  BookOutlined,
+  DeploymentUnitOutlined,
+  ClearOutlined,
+  ProfileOutlined,
+  GlobalOutlined,
+  MessageOutlined,
+  CompassOutlined,
+  PlusOutlined,
+  DeleteOutlined,
+  CheckOutlined,
+  CloseOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import { invoke } from '@tauri-apps/api/core';
 import {
   useSettingsStore,
   defaultSystemPrompt,
@@ -219,26 +234,103 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
 const Settings: React.FC = () => {
   const store = useSettingsStore();
   const [globalForm] = Form.useForm();
+  const [addForm] = Form.useForm();
+  
+  const [isAddModalVisible, setIsAddModalVisible] = React.useState(false);
+  const [isTesting, setIsTesting] = React.useState(false);
+  const [testResult, setTestResult] = React.useState<{ success: boolean; msg: string } | null>(null);
+
+  // Retrieve current active model configuration
+  const currentModel = store.models?.find((m) => m.id === store.selectedModelId) || store.models?.[0];
 
   React.useEffect(() => {
-    globalForm.setFieldsValue({
-      llmProvider: store.llmProvider,
-      modelInterface: store.modelInterface,
-      llmModel: store.llmModel,
-      llmBaseUrl: store.llmBaseUrl,
-      llmApiKey: store.llmApiKey,
-    });
-  }, [store]);
+    if (currentModel) {
+      globalForm.setFieldsValue({
+        name: currentModel.name,
+        provider: currentModel.provider,
+        modelInterface: currentModel.modelInterface,
+        llmModel: currentModel.model,
+        llmBaseUrl: currentModel.baseUrl,
+        llmApiKey: currentModel.apiKey,
+      });
+      // Clear test result on model change
+      setTestResult(null);
+    }
+  }, [store.selectedModelId, currentModel]);
 
   const handleSaveGlobalConfig = (values: any) => {
-    store.setLlmConfig({
-      llmProvider: values.llmProvider,
+    if (!store.selectedModelId) {
+      message.error('请选择或添加一个模型配置');
+      return;
+    }
+    store.updateModel(store.selectedModelId, {
+      name: values.name,
+      provider: values.provider,
       modelInterface: values.modelInterface,
-      llmModel: values.llmModel,
-      llmBaseUrl: values.llmBaseUrl,
-      llmApiKey: values.llmApiKey,
+      model: values.llmModel,
+      baseUrl: values.llmBaseUrl,
+      apiKey: values.llmApiKey,
     });
-    message.success('已保存全局模型设置');
+    message.success('已保存并应用模型设置');
+  };
+
+  const handleDeleteModel = () => {
+    if (!store.selectedModelId) return;
+    if ((store.models || []).length <= 1) {
+      message.warning('必须保留至少一个模型配置');
+      return;
+    }
+    store.deleteModel(store.selectedModelId);
+    message.success('已删除当前模型配置');
+  };
+
+  const handleTestConnection = async () => {
+    try {
+      const values = await globalForm.validateFields();
+      setIsTesting(true);
+      setTestResult(null);
+      
+      const result = await invoke<string>('test_llm_connection', {
+        request: {
+          modelInterface: values.modelInterface,
+          baseUrl: values.llmBaseUrl,
+          apiKey: values.llmApiKey,
+          model: values.llmModel,
+        }
+      });
+      
+      setIsTesting(false);
+      setTestResult({ success: true, msg: result });
+      message.success('连接测试成功！');
+    } catch (err: any) {
+      setIsTesting(false);
+      const errMsg = typeof err === 'string' ? err : (err.message || JSON.stringify(err));
+      setTestResult({ success: false, msg: errMsg });
+      message.error('连接测试失败，请检查配置参数');
+    }
+  };
+
+  const handleOpenAddModal = () => {
+    addForm.resetFields();
+    addForm.setFieldsValue({
+      provider: 'DeepSeek',
+      modelInterface: 'OpenAI-compatible',
+      baseUrl: 'https://api.deepseek.com/v1',
+    });
+    setIsAddModalVisible(true);
+  };
+
+  const handleSaveNewModel = (values: any) => {
+    store.addModel({
+      name: values.name,
+      provider: values.provider,
+      modelInterface: values.modelInterface,
+      baseUrl: values.baseUrl,
+      apiKey: values.apiKey,
+      model: values.model,
+    });
+    setIsAddModalVisible(false);
+    message.success(`已添加并切换至模型：${values.name}`);
   };
 
   return (
@@ -310,6 +402,31 @@ const Settings: React.FC = () => {
               }}
               styles={{ body: { padding: '24px' } }}
             >
+              {/* 模型选择区域 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px', backgroundColor: '#faf9f5', padding: '16px', borderRadius: '8px', border: '1px solid #f2eee8' }}>
+                <span style={{ fontWeight: 500, color: '#5c5751', flexShrink: 0 }}>当前使用模型:</span>
+                <Select
+                  value={store.selectedModelId}
+                  onChange={(val) => store.selectModel(val)}
+                  style={{ flex: 1, minWidth: 200 }}
+                  options={(store.models || []).map((m) => ({ label: m.name, value: m.id }))}
+                />
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={handleOpenAddModal}
+                  style={{
+                    backgroundColor: '#d97757',
+                    borderColor: '#d97757',
+                    color: '#ffffff',
+                    fontWeight: 500,
+                    borderRadius: '6px'
+                  }}
+                >
+                  添加模型
+                </Button>
+              </div>
+
               <Form
                 form={globalForm}
                 layout="vertical"
@@ -317,7 +434,10 @@ const Settings: React.FC = () => {
                 requiredMark={false}
               >
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
-                  <Form.Item label="模型服务商 (Provider)" name="llmProvider">
+                  <Form.Item label="配置显示名称" name="name" rules={[{ required: true, message: '显示名称不能为空' }]}>
+                    <Input placeholder="例如: GPT-4o 写作模型" />
+                  </Form.Item>
+                  <Form.Item label="模型服务商 (Provider)" name="provider">
                     <Select
                       onChange={(value) => {
                         const preset = MODEL_PROVIDER_PRESETS.find((p) => p.provider === value);
@@ -331,44 +451,169 @@ const Settings: React.FC = () => {
                       options={MODEL_PROVIDER_PRESETS.map((p) => ({ value: p.provider, label: p.provider }))}
                     />
                   </Form.Item>
+
                   <Form.Item label="接口类型 (Interface Type)" name="modelInterface">
                     <Select
                       options={modelInterfaceOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
                     />
                   </Form.Item>
-
-                  <Form.Item label="模型名称 (Model)" name="llmModel">
+                  <Form.Item label="模型名称 (Model)" name="llmModel" rules={[{ required: true, message: '模型名称不能为空' }]}>
                     <Input placeholder="例如: gpt-4o, claude-3-5-sonnet" />
                   </Form.Item>
-                  <Form.Item label="接口地址 (Base URL)" name="llmBaseUrl">
+
+                  <Form.Item label="接口地址 (Base URL)" name="llmBaseUrl" rules={[{ required: true, message: '接口地址不能为空' }]}>
                     <Input placeholder="https://api.openai.com/v1" />
+                  </Form.Item>
+                  <Form.Item label="模型 API Key (API Key)" name="llmApiKey" rules={[{ required: true, message: 'API Key 不能为空' }]}>
+                    <Input.Password placeholder="sk-..." />
                   </Form.Item>
                 </div>
 
-                <Form.Item label="模型 API Key (API Key)" name="llmApiKey" style={{ marginBottom: '24px' }}>
-                  <Input.Password placeholder="sk-..." />
-                </Form.Item>
-
-                <Form.Item style={{ marginBottom: 0 }}>
-                  <Button
-                    type="primary"
-                    htmlType="submit"
-                    size="large"
+                {/* 连接测试结果回显 */}
+                {testResult && (
+                  <div
                     style={{
-                      backgroundColor: '#d97757',
-                      borderColor: '#d97757',
-                      color: '#ffffff',
-                      fontWeight: 500,
-                      borderRadius: '6px',
-                      padding: '0 32px'
+                      marginBottom: '24px',
+                      padding: '12px 16px',
+                      borderRadius: '8px',
+                      border: testResult.success ? '1px solid #d4edda' : '1px solid #f8d7da',
+                      backgroundColor: testResult.success ? '#d4edda20' : '#f8d7da20',
+                      color: testResult.success ? '#155724' : '#721c24',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                      fontSize: '14px'
                     }}
                   >
-                    保存全局设置
-                  </Button>
-                </Form.Item>
+                    {testResult.success ? (
+                      <CheckOutlined style={{ color: '#28a745', marginTop: '3px' }} />
+                    ) : (
+                      <CloseOutlined style={{ color: '#dc3545', marginTop: '3px' }} />
+                    )}
+                    <div style={{ wordBreak: 'break-all' }}>
+                      <strong style={{ display: 'block', marginBottom: '4px' }}>
+                        {testResult.success ? '连接测试成功' : '连接测试失败'}
+                      </strong>
+                      {testResult.msg}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+                  <Space size={12}>
+                    <Button
+                      type="primary"
+                      htmlType="submit"
+                      style={{
+                        backgroundColor: '#d97757',
+                        borderColor: '#d97757',
+                        color: '#ffffff',
+                        fontWeight: 500,
+                        borderRadius: '6px',
+                        padding: '0 24px'
+                      }}
+                    >
+                      保存并应用
+                    </Button>
+                    <Button
+                      icon={<ThunderboltOutlined />}
+                      onClick={handleTestConnection}
+                      loading={isTesting}
+                      style={{
+                        borderColor: '#eae6df',
+                        color: '#5c5751',
+                        borderRadius: '6px',
+                        padding: '0 16px'
+                      }}
+                    >
+                      测试连接
+                    </Button>
+                  </Space>
+
+                  <Popconfirm
+                    title="确定要删除当前模型配置吗？"
+                    onConfirm={handleDeleteModel}
+                    okText="确定"
+                    cancelText="取消"
+                    disabled={(store.models || []).length <= 1}
+                  >
+                    <Button
+                      danger
+                      icon={<DeleteOutlined />}
+                      disabled={(store.models || []).length <= 1}
+                      style={{
+                        borderRadius: '6px'
+                      }}
+                    >
+                      删除模型
+                    </Button>
+                  </Popconfirm>
+                </div>
               </Form>
             </Card>
           </section>
+
+          {/* 添加模型弹窗 */}
+          <Modal
+            title={<div style={{ fontWeight: 600, color: '#33312e' }}>添加新模型配置</div>}
+            open={isAddModalVisible}
+            onCancel={() => setIsAddModalVisible(false)}
+            onOk={() => addForm.submit()}
+            okText="添加"
+            cancelText="取消"
+            styles={{ body: { paddingTop: '16px' } }}
+            okButtonProps={{
+              style: {
+                backgroundColor: '#d97757',
+                borderColor: '#d97757',
+                borderRadius: '6px'
+              }
+            }}
+            cancelButtonProps={{
+              style: {
+                borderRadius: '6px'
+              }
+            }}
+          >
+            <Form
+              form={addForm}
+              layout="vertical"
+              onFinish={handleSaveNewModel}
+              requiredMark={false}
+            >
+              <Form.Item label="配置显示名称" name="name" rules={[{ required: true, message: '请输入配置显示名称' }]}>
+                <Input placeholder="例如: GPT-4o 写作模型" />
+              </Form.Item>
+              <Form.Item label="模型服务商 (Provider)" name="provider">
+                <Select
+                  onChange={(value) => {
+                    const preset = MODEL_PROVIDER_PRESETS.find((p) => p.provider === value);
+                    if (preset && preset.provider !== "Custom") {
+                      addForm.setFieldsValue({
+                        baseUrl: preset.baseUrl,
+                        modelInterface: preset.interface,
+                      });
+                    }
+                  }}
+                  options={MODEL_PROVIDER_PRESETS.map((p) => ({ value: p.provider, label: p.provider }))}
+                />
+              </Form.Item>
+              <Form.Item label="接口类型 (Interface Type)" name="modelInterface">
+                <Select
+                  options={modelInterfaceOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
+                />
+              </Form.Item>
+              <Form.Item label="模型名称 (Model)" name="model" rules={[{ required: true, message: '请输入模型名称' }]}>
+                <Input placeholder="例如: gpt-4o, claude-3-5-sonnet" />
+              </Form.Item>
+              <Form.Item label="接口地址 (Base URL)" name="baseUrl" rules={[{ required: true, message: '请输入接口地址' }]}>
+                <Input placeholder="https://api.openai.com/v1" />
+              </Form.Item>
+              <Form.Item label="模型 API Key (API Key)" name="apiKey" rules={[{ required: true, message: '请输入 API Key' }]}>
+                <Input.Password placeholder="sk-..." />
+              </Form.Item>
+            </Form>
+          </Modal>
 
           <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
 

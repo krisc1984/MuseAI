@@ -312,3 +312,68 @@ pub const MAX_SUBAGENT_TOOL_ROUNDS: usize = 50;
 pub const MAX_SUBAGENT_OUTPUT_CHARS: usize = 5_000;
 pub const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
 pub const MAX_BASH_TIMEOUT_SECS: u64 = 600;
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestConnectionRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agent_run_options_parent_allows_all_tools() {
+        let opts = AgentRunOptions::parent();
+        assert!(opts.allows_tool("read"));
+        assert!(opts.allows_tool("write"));
+        assert!(opts.allows_tool("bash"));
+        assert!(opts.allows_tool("subagent"));
+    }
+
+    #[test]
+    fn test_agent_run_options_subagent_excludes_subagent() {
+        let opts = AgentRunOptions::subagent(None);
+        assert!(opts.allows_tool("read"));
+        assert!(opts.allows_tool("write"));
+        assert!(!opts.allows_tool("subagent"));
+    }
+
+    #[test]
+    fn test_agent_run_options_allowed_tools_filtering() {
+        let opts = AgentRunOptions {
+            allowed_tools: Some(vec!["read".to_string(), "write".to_string()]),
+            ..AgentRunOptions::parent()
+        };
+        assert!(opts.allows_tool("read"));
+        assert!(opts.allows_tool("write"));
+        assert!(!opts.allows_tool("bash"));
+    }
+
+    #[test]
+    fn test_agent_run_options_excluded_tools_filtering() {
+        let opts = AgentRunOptions {
+            excluded_tools: vec!["bash".to_string()],
+            ..AgentRunOptions::parent()
+        };
+        assert!(opts.allows_tool("read"));
+        assert!(!opts.allows_tool("bash"));
+    }
+
+    #[test]
+    fn test_agent_run_options_allowed_and_excluded_combined() {
+        let opts = AgentRunOptions {
+            allowed_tools: Some(vec!["read".to_string(), "bash".to_string()]),
+            excluded_tools: vec!["bash".to_string()],
+            ..AgentRunOptions::parent()
+        };
+        assert!(opts.allows_tool("read"));
+        assert!(!opts.allows_tool("bash"));
+        assert!(!opts.allows_tool("write"));
+    }
+}
+

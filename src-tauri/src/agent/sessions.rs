@@ -702,3 +702,82 @@ pub async fn optimize_character_memories(request: OptimizeCharacterMemoriesReque
 
     Ok(raw_content)
 }
+
+#[tauri::command]
+pub async fn test_llm_connection(request: TestConnectionRequest) -> Result<String, String> {
+    if request.api_key.trim().is_empty() {
+        return Err(String::from("API Key 不能为空"));
+    }
+    if request.model.trim().is_empty() {
+        return Err(String::from("模型名称不能为空"));
+    }
+    if request.base_url.trim().is_empty() {
+        return Err(String::from("接口地址不能为空"));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let user_prompt = "ping";
+    let max_tokens = 5;
+
+    match request.model_interface.as_str() {
+        "Anthropic-compatible" => {
+            let endpoint = build_anthropic_endpoint(&request.base_url);
+            let body = json!({
+                "model": request.model,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "stream": false,
+                "max_tokens": max_tokens,
+            });
+
+            let response = client
+                .post(&endpoint)
+                .header("x-api-key", &request.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("无法连接到服务器：{}", e))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Err(format!("接口请求失败 (Status {}): {}", status, body_text));
+            }
+
+            Ok("连接成功".to_string())
+        }
+        _ => {
+            let endpoint = build_openai_endpoint(&request.base_url);
+            let messages = vec![
+                json!({"role": "user", "content": user_prompt}),
+            ];
+            let body = json!({
+                "model": request.model,
+                "messages": messages,
+                "stream": false,
+                "max_tokens": max_tokens,
+            });
+
+            let response = client
+                .post(&endpoint)
+                .bearer_auth(&request.api_key)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("无法连接到服务器：{}", e))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Err(format!("接口请求失败 (Status {}): {}", status, body_text));
+            }
+
+            Ok("连接成功".to_string())
+        }
+    }
+}
+

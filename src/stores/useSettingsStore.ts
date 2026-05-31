@@ -3,6 +3,16 @@ import { persist } from 'zustand/middleware';
 
 
 
+export interface LlmModelConfig {
+  id: string;
+  name: string;
+  provider: string;
+  modelInterface: 'OpenAI-compatible' | 'Anthropic-compatible';
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export interface AgentConfig {
   temperature?: number;
   maxOutputTokens?: number;
@@ -17,6 +27,9 @@ export interface SettingsState {
   llmApiKey: string;
   llmModel: string;
 
+  models: LlmModelConfig[];
+  selectedModelId: string | null;
+
   systemPrompt: string;
   deAiDetectorPrompt: string;
   deAiRemoverPrompt: string;
@@ -25,7 +38,6 @@ export interface SettingsState {
   outlineAssessmentPrompt: string;
   partnerChatPrompt: string;
   storyAgentPrompt: string;
-
 
   worksDirectory: string | null;
   agentConfigs: Record<string, AgentConfig>;
@@ -52,6 +64,11 @@ export interface SettingsState {
 
   setWorksDirectory: (dir: string | null) => void;
   setArticleType: (type: string[]) => void;
+
+  addModel: (config: Omit<LlmModelConfig, 'id'>) => string;
+  updateModel: (id: string, config: Partial<LlmModelConfig>) => void;
+  deleteModel: (id: string) => void;
+  selectModel: (id: string) => void;
 }
 
 export const defaultSystemPrompt = `你是一名有着20年网文写作经验的资深网文作者，专门在番茄小说上写各类长篇、短篇小说，以及在微信公众号写文章。
@@ -451,6 +468,19 @@ export const useSettingsStore = create<SettingsState>()(
       llmApiKey: '',
       llmModel: 'gpt-4o',
 
+      models: [
+        {
+          id: 'default-openai',
+          name: '默认模型 (OpenAI)',
+          provider: 'OpenAI',
+          modelInterface: 'OpenAI-compatible',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: '',
+          model: 'gpt-4o',
+        }
+      ],
+      selectedModelId: 'default-openai',
+
       systemPrompt: defaultSystemPrompt,
       deAiDetectorPrompt: defaultDeAiDetectorPrompt,
       deAiRemoverPrompt: defaultDeAiRemoverPrompt,
@@ -522,10 +552,85 @@ export const useSettingsStore = create<SettingsState>()(
 
       setWorksDirectory: (dir) => set({ worksDirectory: dir }),
       setArticleType: (type) => set({ articleType: type }),
+
+      addModel: (config) => {
+        const id = 'model_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        const newModel = { id, ...config };
+        set((state) => {
+          const updatedModels = [...(state.models || []), newModel];
+          return {
+            models: updatedModels,
+            selectedModelId: id,
+            llmProvider: newModel.provider,
+            modelInterface: newModel.modelInterface,
+            llmBaseUrl: newModel.baseUrl,
+            llmApiKey: newModel.apiKey,
+            llmModel: newModel.model,
+          };
+        });
+        return id;
+      },
+
+      updateModel: (id, config) => set((state) => {
+        const updatedModels = (state.models || []).map((m) =>
+          m.id === id ? { ...m, ...config } : m
+        );
+        const updatedModel = updatedModels.find((m) => m.id === id);
+        
+        if (state.selectedModelId === id && updatedModel) {
+          return {
+            models: updatedModels,
+            llmProvider: updatedModel.provider,
+            modelInterface: updatedModel.modelInterface,
+            llmBaseUrl: updatedModel.baseUrl,
+            llmApiKey: updatedModel.apiKey,
+            llmModel: updatedModel.model,
+          };
+        }
+        return { models: updatedModels };
+      }),
+
+      deleteModel: (id) => set((state) => {
+        const currentModels = state.models || [];
+        if (currentModels.length <= 1) return {};
+        
+        const updatedModels = currentModels.filter((m) => m.id !== id);
+        let nextSelectedId = state.selectedModelId;
+        
+        if (state.selectedModelId === id) {
+          nextSelectedId = updatedModels[0].id;
+          const nextModel = updatedModels[0];
+          return {
+            models: updatedModels,
+            selectedModelId: nextSelectedId,
+            llmProvider: nextModel.provider,
+            modelInterface: nextModel.modelInterface,
+            llmBaseUrl: nextModel.baseUrl,
+            llmApiKey: nextModel.apiKey,
+            llmModel: nextModel.model,
+          };
+        }
+        
+        return { models: updatedModels };
+      }),
+
+      selectModel: (id) => set((state) => {
+        const targetModel = (state.models || []).find((m) => m.id === id);
+        if (!targetModel) return {};
+        
+        return {
+          selectedModelId: id,
+          llmProvider: targetModel.provider,
+          modelInterface: targetModel.modelInterface,
+          llmBaseUrl: targetModel.baseUrl,
+          llmApiKey: targetModel.apiKey,
+          llmModel: targetModel.model,
+        };
+      }),
     }),
     {
       name: 'museai-settings-storage',
-      version: 8,
+      version: 9,
       partialize: (state) => {
         const { worksDirectory: _, ...rest } = state;
         return rest as SettingsState;
@@ -589,10 +694,29 @@ export const useSettingsStore = create<SettingsState>()(
             ? defaultStoryAgentPrompt
             : state.storyAgentPrompt,
         };
-        if (version < 2) {
-          return { ...base, worksDirectory: null };
+
+        let finalState = base;
+        if (!state.models || state.models.length === 0) {
+          const defaultModel = {
+            id: 'legacy-default-model',
+            name: '默认模型',
+            provider: state.llmProvider || 'OpenAI',
+            modelInterface: state.modelInterface || 'OpenAI-compatible',
+            baseUrl: state.llmBaseUrl || 'https://api.openai.com/v1',
+            apiKey: state.llmApiKey || '',
+            model: state.llmModel || 'gpt-4o',
+          };
+          finalState = {
+            ...finalState,
+            models: [defaultModel],
+            selectedModelId: 'legacy-default-model',
+          };
         }
-        return base;
+
+        if (version < 2) {
+          return { ...finalState, worksDirectory: null };
+        }
+        return finalState;
       },
     }
   )
