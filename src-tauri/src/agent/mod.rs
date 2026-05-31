@@ -31,6 +31,8 @@ pub async fn run_openai_agent_loop(
     let mut messages = openai_history_messages(&system_prompt, &history);
     let tools = openai_tool_definitions(&options);
 
+    let thinking_depth = request.thinking_depth.as_deref().unwrap_or("").trim();
+
     for round in 0..=options.max_tool_rounds {
         let mut body = json!({
             "model": request.model,
@@ -42,6 +44,16 @@ pub async fn run_openai_agent_loop(
             "tool_choice": "auto",
         });
         body["stream_options"] = json!({ "include_usage": true });
+
+        // 根据 thinking_depth 设置思考参数
+        // enable_thinking: Qwen3 等支持；reasoning_effort: OpenAI o系列 / OpenRouter 支持
+        // 不支持这些参数的服务商会自动忽略未知字段，不会报错
+        if thinking_depth.is_empty() || thinking_depth == "off" {
+            body["enable_thinking"] = json!(false);
+        } else {
+            body["enable_thinking"] = json!(true);
+            body["reasoning_effort"] = json!(thinking_depth); // "low" / "medium" / "high"
+        }
 
         let response = client
             .post(&endpoint)
@@ -57,7 +69,7 @@ pub async fn run_openai_agent_loop(
             return Err(format!("OpenAI 兼容接口请求失败：{} {}", status, body));
         }
 
-        let stream_result = stream_openai_round(app, run_id, response, &options).await?;
+        let stream_result = stream_openai_round(app, run_id, request, response, &options).await?;
         if stream_result.tool_calls.is_empty() {
             return Ok(stream_result.content);
         }
@@ -112,9 +124,17 @@ pub async fn run_openai_agent_loop(
 async fn stream_openai_round(
     app: &AppHandle,
     run_id: &str,
+    request: &ChatStreamRequest,
     response: reqwest::Response,
     options: &AgentRunOptions,
 ) -> Result<OpenAiRoundResult, String> {
+    // 当 thinking_depth 为 off 或未设置时，不显示 thinking 卡片
+    // 某些模型（如 DeepSeek-R1）无视参数仍会返回 reasoning_content，在此过滤
+    let show_thinking = {
+        let depth = request.thinking_depth.as_deref().unwrap_or("").trim();
+        !depth.is_empty() && depth != "off"
+    };
+
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut result = OpenAiRoundResult::default();
@@ -127,7 +147,7 @@ async fn stream_openai_round(
             }
             if let Some(event) = parse_openai_stream_event(data) {
                 if let Some(reasoning) = event.reasoning_content {
-                    if options.emit_events {
+                    if options.emit_events && show_thinking {
                         emit_chat_event(
                             app,
                             run_id,
