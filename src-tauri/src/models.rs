@@ -43,6 +43,7 @@ pub struct TodoItem {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
+    pub id: Option<String>,
     pub role: String,
     pub content: String,
     pub tool_call_id: Option<String>,
@@ -70,6 +71,7 @@ pub struct ChatStreamRequest {
     pub system_prompt: String,
     pub workspace_path: Option<String>,
     pub messages: Vec<ChatMessage>,
+    pub context_compaction: Option<SessionContextCompaction>,
     pub selected_reference_files: Option<Vec<String>>,
     pub allowed_tools: Option<Vec<String>>,
     pub allowed_write_paths: Option<Vec<String>>,
@@ -97,6 +99,7 @@ pub struct ChatStreamEvent {
     pub tool_status: Option<String>,
     pub tool_arguments: Option<String>,
     pub todos: Option<Vec<AgentSessionTodo>>,
+    pub context_compaction: Option<SessionContextCompaction>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -133,6 +136,7 @@ pub struct AgentSessionRecord {
     pub selected_reference_files: Vec<String>,
     pub selected_outline_file: Option<String>,
     pub todos: Vec<AgentSessionTodo>,
+    pub context_compaction: Option<SessionContextCompaction>,
     pub is_archived: Option<bool>,
     pub character_card_id: Option<String>,
     pub character_card_ids: Option<Vec<String>>,
@@ -145,6 +149,16 @@ pub struct AgentSessionSummary {
     pub saved_at: u64,
     pub character_card_id: Option<String>,
     pub character_card_ids: Option<Vec<String>>,
+}
+
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionContextCompaction {
+    pub summary: String,
+    pub compacted_through_message_id: Option<String>,
+    pub compacted_through_index: usize,
+    pub source_message_count: usize,
+    pub updated_at: u64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -395,4 +409,3 @@ mod tests {
         assert!(!opts.allows_tool("write"));
     }
 }
-

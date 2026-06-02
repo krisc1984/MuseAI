@@ -15,12 +15,13 @@ import {
   ThinkingBlock,
   AgentSessionSummary,
   AgentSessionRecord,
+  SessionContextCompaction,
 } from '../stores/useAgentStore';
 import { useOutlineStore } from '../stores/useOutlineStore';
 
 interface ChatStreamEvent {
   runId: string;
-  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'done' | 'error';
+  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'context_compacted' | 'done' | 'error';
   delta?: string;
   message?: string;
   toolCallId?: string;
@@ -28,6 +29,7 @@ interface ChatStreamEvent {
   toolStatus?: string;
   toolArguments?: string;
   todos?: AgentTodo[];
+  contextCompaction?: SessionContextCompaction;
 }
 
 interface AgentToolCallPayload {
@@ -37,6 +39,7 @@ interface AgentToolCallPayload {
 }
 
 interface ModelMessage {
+  id?: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
   toolCallId?: string;
@@ -56,6 +59,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
     isCreationStreaming: isStreaming, setIsCreationStreaming: setIsStreaming,
     creationExpandedBlocks: expandedBlocks, setCreationExpandedBlocks: setExpandedBlocks,
     creationTodos: todos, setCreationTodos: setTodos,
+    creationContextCompaction: contextCompaction, setCreationContextCompaction: setContextCompaction,
     isCreationTodoOpen: isTodoOpen, setIsCreationTodoOpen: setIsTodoOpen,
     creationRun: activeRun, setCreationRun: setActiveRun,
     creationSelectedReferenceFiles: selectedReferenceFiles, setCreationSelectedReferenceFiles: setSelectedReferenceFiles,
@@ -79,6 +83,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
   const messagesRef = useRef(messages);
   const selectedReferenceFilesRef = useRef(selectedReferenceFiles);
   const todosRef = useRef(todos);
+  const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
   const sessionIdRef = useRef(sessionId);
   const sessionTitleRef = useRef(sessionTitle);
 
@@ -114,6 +119,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
   }, [messages]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
+  useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
 
   React.useEffect(() => {
     invoke<SkillDefinition[]>('get_skills').then(setSkills).catch(console.error);
@@ -167,6 +173,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
           selectedReferenceFiles: selectedReferenceFilesRef.current,
           selectedOutlineFile: null,
           todos: todosRef.current,
+          contextCompaction: contextCompactionRef.current,
         },
       });
       await refreshSessions();
@@ -184,6 +191,8 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
       setSessionTitle(session.title);
       setMessages(session.messages);
       setSelectedReferenceFiles(session.selectedReferenceFiles ?? []);
+      contextCompactionRef.current = session.contextCompaction ?? null;
+      setContextCompaction(session.contextCompaction ?? null);
       setTodos(session.todos ?? []);
       setIsTodoOpen(false);
       setIsStreaming(false);
@@ -317,6 +326,12 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
         if (nextTodos.length === 0) {
           setIsTodoOpen(false);
         }
+        return;
+      }
+
+      if (payload.eventType === 'context_compacted' && payload.contextCompaction) {
+        contextCompactionRef.current = payload.contextCompaction;
+        setContextCompaction(payload.contextCompaction);
         return;
       }
 
@@ -551,6 +566,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
           systemPrompt: systemPrompt,
           workspacePath: outlineDir,
           messages: buildModelMessages(messages.concat(userMessage), userMessage.id, mentionedSkills),
+          contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: selectedReferenceFiles,
           allowedTools: ['read', 'write', 'edit', 'grep', 'glob', 'skill', 'bash'],
         },
@@ -1165,7 +1181,7 @@ function buildModelMessages(
         const slashCommands = skillNames.map((name) => `/${name}`).join('\n');
         content = `${slashCommands}\n【系统指令】本轮必须优先调用以下技能：${skillNames.join(', ')}\n\n${content}`;
       }
-      return [{ role: 'user', content }];
+      return [{ id: message.id, role: 'user', content }];
     }
 
     return buildAssistantHistoryMessages(message);
@@ -1207,6 +1223,7 @@ function buildAssistantHistoryMessages(message: Message): ModelMessage[] {
 
   if (assistantText.trim()) {
     modelMessages.push({
+      id: message.id,
       role: 'assistant',
       content: assistantText,
       thinkingBlocks: message.thinkingBlocks,
@@ -1218,6 +1235,7 @@ function buildAssistantHistoryMessages(message: Message): ModelMessage[] {
 
 function buildAssistantToolCallMessage(content: string, tools: AgentToolEntry[], thinkingBlocks?: ThinkingBlock[]): ModelMessage {
   return {
+    id: tools[0]?.id ? `assistant-tool-${tools[0].id}` : undefined,
     role: 'assistant',
     content,
     toolCalls: tools.map((tool, index) => ({
@@ -1231,6 +1249,7 @@ function buildAssistantToolCallMessage(content: string, tools: AgentToolEntry[],
 
 function buildToolResultMessage(tool: AgentToolEntry): ModelMessage {
   return {
+    id: tool.id ? `tool-result-${tool.id}` : undefined,
     role: 'tool',
     content: tool.result,
     toolCallId: tool.id,

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Message, AgentSessionSummary } from './useAgentStore';
+import { Message, AgentSessionSummary, SessionContextCompaction } from './useAgentStore';
 import { PartnerItemFields } from './usePartnerStore';
 
 function createSessionId() {
@@ -23,6 +23,7 @@ interface PartnerChatState {
   sessionTitle: string;
   activeRun: { runId: string | null; messageId: string | null };
   isSessionArchived: boolean;
+  contextCompaction: SessionContextCompaction | null;
 
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setInput: (input: string) => void;
@@ -36,6 +37,7 @@ interface PartnerChatState {
   setSessionTitle: (title: string) => void;
   setActiveRun: (run: { runId: string | null; messageId: string | null }) => void;
   setIsSessionArchived: (val: boolean) => void;
+  setContextCompaction: (contextCompaction: SessionContextCompaction | null) => void;
   createNewSession: () => void;
 }
 
@@ -54,6 +56,7 @@ export const usePartnerChatStore = create<PartnerChatState>()(
       sessionTitle: '新聊天',
       activeRun: { runId: null, messageId: null },
       isSessionArchived: false,
+      contextCompaction: null,
 
       setMessages: (updater) => set((state) => ({
         messages: typeof updater === 'function' ? updater(state.messages) : updater,
@@ -73,6 +76,7 @@ export const usePartnerChatStore = create<PartnerChatState>()(
       setSessionTitle: (sessionTitle) => set({ sessionTitle }),
       setActiveRun: (activeRun) => set({ activeRun }),
       setIsSessionArchived: (isSessionArchived) => set({ isSessionArchived }),
+      setContextCompaction: (contextCompaction) => set({ contextCompaction }),
 
       createNewSession: () => {
         set(() => ({
@@ -84,6 +88,7 @@ export const usePartnerChatStore = create<PartnerChatState>()(
           sessionId: createSessionId(),
           sessionTitle: '新聊天',
           isSessionArchived: false,
+          contextCompaction: null,
         }));
       },
     }),

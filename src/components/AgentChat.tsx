@@ -14,12 +14,13 @@ import {
   SkillDefinition,
   AgentSessionSummary,
   AgentSessionRecord,
-  ThinkingBlock
+  ThinkingBlock,
+  SessionContextCompaction
 } from '../stores/useAgentStore';
 
 interface ChatStreamEvent {
   runId: string;
-  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'done' | 'error';
+  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'context_compacted' | 'done' | 'error';
   delta?: string;
   message?: string;
   toolCallId?: string;
@@ -27,6 +28,7 @@ interface ChatStreamEvent {
   toolStatus?: string;
   toolArguments?: string;
   todos?: AgentTodo[];
+  contextCompaction?: SessionContextCompaction;
 }
 
 interface AgentToolCallPayload {
@@ -36,6 +38,7 @@ interface AgentToolCallPayload {
 }
 
 interface ModelMessage {
+  id?: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
   toolCallId?: string;
@@ -55,6 +58,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
     isStreaming, setIsStreaming,
     expandedBlocks, setExpandedBlocks,
     todos, setTodos,
+    contextCompaction, setContextCompaction,
     isTodoOpen, setIsTodoOpen,
     sessions, setSessions,
     skills, setSkills,
@@ -77,6 +81,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
   const sessionIdRef = useRef(sessionId);
   const sessionTitleRef = useRef(sessionTitle);
   const todosRef = useRef(todos);
+  const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [allReferenceFiles, setAllReferenceFiles] = useState<string[]>([]);
@@ -114,6 +119,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
   useEffect(() => {
     todosRef.current = todos;
   }, [todos]);
+
+  useEffect(() => {
+    contextCompactionRef.current = contextCompaction;
+  }, [contextCompaction]);
 
   useEffect(() => {
     let isMounted = true;
@@ -218,6 +227,12 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
         if (nextTodos.length === 0) {
           setIsTodoOpen(false);
         }
+        return;
+      }
+
+      if (payload.eventType === 'context_compacted' && payload.contextCompaction) {
+        contextCompactionRef.current = payload.contextCompaction;
+        setContextCompaction(payload.contextCompaction);
         return;
       }
 
@@ -439,6 +454,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
           systemPrompt: effectiveSystemPrompt,
           workspacePath: settings.worksDirectory,
           messages: buildModelMessages(messages.concat(userMessage), userMessage.id, mentionedSkills),
+          contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: selectedReferenceFiles,
           allowedTools: ['read', 'write', 'edit', 'grep', 'glob', 'skill', 'subagent', 'todo'],
         },
@@ -497,6 +513,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
           selectedReferenceFiles: selectedReferenceFilesRef.current,
           selectedOutlineFile: selectedOutlineFileRef.current,
           todos: todosRef.current,
+          contextCompaction: contextCompactionRef.current,
         },
       });
       await refreshSessions();
@@ -516,6 +533,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
       setSelectedReferenceFiles(session.selectedReferenceFiles ?? []);
       setSelectedOutlineFile(session.selectedOutlineFile ?? null);
       setTodos(session.todos ?? []);
+      contextCompactionRef.current = session.contextCompaction ?? null;
+      setContextCompaction(session.contextCompaction ?? null);
       setIsTodoOpen(false);
       setIsStreaming(false);
       setInput('');
@@ -1069,7 +1088,7 @@ function buildModelMessages(
         const slashCommands = skillNames.map((name) => `/${name}`).join('\n');
         content = `${slashCommands}\n【系统指令】本轮必须优先调用以下技能：${skillNames.join(', ')}\n\n${content}`;
       }
-      return [{ role: 'user', content }];
+      return [{ id: message.id, role: 'user', content }];
     }
 
     return buildAssistantHistoryMessages(message);
@@ -1111,6 +1130,7 @@ function buildAssistantHistoryMessages(message: Message): ModelMessage[] {
 
   if (assistantText.trim()) {
     modelMessages.push({
+      id: message.id,
       role: 'assistant',
       content: assistantText,
       thinkingBlocks: message.thinkingBlocks,
@@ -1122,6 +1142,7 @@ function buildAssistantHistoryMessages(message: Message): ModelMessage[] {
 
 function buildAssistantToolCallMessage(content: string, tools: AgentToolEntry[], thinkingBlocks?: ThinkingBlock[]): ModelMessage {
   return {
+    id: tools[0]?.id ? `assistant-tool-${tools[0].id}` : undefined,
     role: 'assistant',
     content,
     toolCalls: tools.map((tool, index) => ({
@@ -1135,6 +1156,7 @@ function buildAssistantToolCallMessage(content: string, tools: AgentToolEntry[],
 
 function buildToolResultMessage(tool: AgentToolEntry): ModelMessage {
   return {
+    id: tool.id ? `tool-result-${tool.id}` : undefined,
     role: 'tool',
     content: tool.result,
     toolCallId: tool.id,

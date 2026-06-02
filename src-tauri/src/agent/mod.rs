@@ -23,9 +23,13 @@ pub async fn run_openai_agent_loop(
     let client = reqwest::Client::new();
     let endpoint = build_openai_endpoint(&request.base_url);
     let system_prompt = assemble_system_prompt(Some(app), request)?;
+    let context_compaction =
+        prepare_session_context_compaction(app, run_id, request, &system_prompt, &options).await?;
+    let compacted_history =
+        effective_history_with_compaction(&request.messages, context_compaction.as_ref());
     let history = trim_history_to_context_budget(
         &system_prompt,
-        &request.messages,
+        &compacted_history,
         request.max_context_tokens,
     );
     let mut messages = openai_history_messages(&system_prompt, &history);
@@ -181,9 +185,13 @@ pub async fn run_anthropic_agent_loop(
     let client = reqwest::Client::new();
     let endpoint = build_anthropic_endpoint(&request.base_url);
     let system_prompt = assemble_system_prompt(Some(app), request)?;
+    let context_compaction =
+        prepare_session_context_compaction(app, run_id, request, &system_prompt, &options).await?;
+    let compacted_history =
+        effective_history_with_compaction(&request.messages, context_compaction.as_ref());
     let history = trim_history_to_context_budget(
         &system_prompt,
-        &request.messages,
+        &compacted_history,
         request.max_context_tokens,
     );
     let mut messages = anthropic_history_messages(&history);
@@ -346,6 +354,195 @@ async fn stream_anthropic_round(
     }
     Ok(result)
 }
+async fn prepare_session_context_compaction(
+    app: &AppHandle,
+    run_id: &str,
+    request: &ChatStreamRequest,
+    system_prompt: &str,
+    options: &AgentRunOptions,
+) -> Result<Option<SessionContextCompaction>, String> {
+    let Some(plan) = plan_context_compaction(
+        system_prompt,
+        &request.messages,
+        request.context_compaction.as_ref(),
+        request.max_context_tokens,
+    ) else {
+        return Ok(request.context_compaction.clone());
+    };
+
+    let summary = summarize_context_messages(request, &plan.messages_to_summarize).await;
+    let compaction = SessionContextCompaction {
+        summary,
+        compacted_through_message_id: plan.compacted_through_message_id,
+        compacted_through_index: plan.compacted_through_index,
+        source_message_count: request.messages.len(),
+        updated_at: current_timestamp_millis(),
+    };
+    emit_context_compacted(app, run_id, &compaction, options);
+    Ok(Some(compaction))
+}
+
+async fn summarize_context_messages(
+    request: &ChatStreamRequest,
+    messages: &[ChatMessage],
+) -> String {
+    let fallback = || fallback_context_summary(messages);
+    let flat = flatten_context_messages(messages);
+    if flat.trim().is_empty()
+        || request.api_key.trim().is_empty()
+        || request.model.trim().is_empty()
+    {
+        return fallback();
+    }
+
+    let system_prompt = concat!(
+        "请把这段 MuseAI 当前会话的旧上下文压缩成简洁摘要，用中文输出。\n",
+        "必须保留：用户目标、已确认要求、当前任务进度、重要文件/路径/版本、关键工具结果、已失败或被否定的方向、后续待处理问题。\n",
+        "必须删除：冗长工具输出、重复寒暄、长代码全文、无关细节。\n",
+        "输出只给摘要正文，不要回答用户，不要新增事实。"
+    );
+    let user_prompt = format!(
+        "需要压缩的旧上下文如下：\n\n{}",
+        truncate_chars(&flat, 24_000)
+    );
+    let client = reqwest::Client::new();
+    let result = match request.model_interface.as_str() {
+        "Anthropic-compatible" => {
+            let endpoint = build_anthropic_endpoint(&request.base_url);
+            let body = json!({
+                "model": request.model,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "system": system_prompt,
+                "stream": false,
+                "temperature": 0.2,
+                "max_tokens": 1200,
+            });
+            match client
+                .post(&endpoint)
+                .header("x-api-key", &request.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    let json: Result<Value, _> = response.json().await;
+                    json.ok().and_then(|value| {
+                        value
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .and_then(|arr| {
+                                arr.iter()
+                                    .find(|item| item.get("type") == Some(&json!("text")))
+                            })
+                            .and_then(|block| block.get("text"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(String::from)
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => {
+            let endpoint = build_openai_endpoint(&request.base_url);
+            let body = json!({
+                "model": request.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "stream": false,
+                "temperature": 0.2,
+                "max_tokens": 1200,
+            });
+            match client
+                .post(&endpoint)
+                .bearer_auth(&request.api_key)
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    let json: Result<Value, _> = response.json().await;
+                    json.ok().and_then(|value| {
+                        value
+                            .get("choices")
+                            .and_then(Value::as_array)
+                            .and_then(|arr| arr.first())
+                            .and_then(|choice| choice.get("message"))
+                            .and_then(|message| message.get("content"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(String::from)
+                    })
+                }
+                _ => None,
+            }
+        }
+    };
+
+    result.unwrap_or_else(fallback)
+}
+
+fn flatten_context_messages(messages: &[ChatMessage]) -> String {
+    let mut lines = Vec::new();
+    for message in messages {
+        if !message.content.trim().is_empty() {
+            lines.push(format!(
+                "[{}] {}",
+                message.role,
+                truncate_chars(&message.content, 1200)
+            ));
+        }
+        if let Some(tool_calls) = message
+            .tool_calls
+            .as_deref()
+            .filter(|calls| !calls.is_empty())
+        {
+            lines.push(format!(
+                "[assistant tool_calls] {}",
+                truncate_chars(&serde_json::to_string(tool_calls).unwrap_or_default(), 1200)
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+fn current_timestamp_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn emit_context_compacted(
+    app: &AppHandle,
+    run_id: &str,
+    compaction: &SessionContextCompaction,
+    options: &AgentRunOptions,
+) {
+    if !options.emit_events || options.parent_tool_call_id.is_some() {
+        return;
+    }
+    let _ = app.emit(
+        "agent-chat-stream",
+        ChatStreamEvent {
+            run_id: run_id.to_string(),
+            event_type: "context_compacted".to_string(),
+            delta: None,
+            message: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_status: None,
+            tool_arguments: None,
+            todos: None,
+            context_compaction: Some(compaction.clone()),
+        },
+    );
+}
 pub fn emit_chat_event(
     app: &AppHandle,
     run_id: &str,
@@ -375,6 +572,7 @@ pub fn emit_chat_event(
                     tool_status: Some("running".to_string()),
                     tool_arguments: None,
                     todos: None,
+                    context_compaction: None,
                 },
             );
         }
@@ -393,6 +591,7 @@ pub fn emit_chat_event(
             tool_status: None,
             tool_arguments: None,
             todos: None,
+            context_compaction: None,
         },
     );
 }
@@ -436,6 +635,7 @@ pub fn emit_tool_event(
                     tool_status: Some("running".to_string()),
                     tool_arguments: None,
                     todos: None,
+                    context_compaction: None,
                 },
             );
         }
@@ -454,6 +654,7 @@ pub fn emit_tool_event(
             tool_status: tool_status.map(String::from),
             tool_arguments: tool_arguments.map(String::from),
             todos: None,
+            context_compaction: None,
         },
     );
 }
@@ -470,6 +671,7 @@ fn emit_todo_update(app: &AppHandle, run_id: &str, todos: Vec<AgentSessionTodo>)
             tool_status: None,
             tool_arguments: None,
             todos: Some(todos),
+            context_compaction: None,
         },
     );
 }
@@ -689,7 +891,9 @@ fn run_subagent_agent_loop<'a>(
     Box::pin(async move {
         let mut child_request = parent_request.clone();
         child_request.system_prompt = append_subagent_system_prompt(&child_request.system_prompt);
+        child_request.context_compaction = None;
         child_request.messages = vec![ChatMessage {
+            id: None,
             role: "user".to_string(),
             content: task,
             tool_call_id: None,

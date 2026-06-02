@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Message, AgentSessionSummary } from './useAgentStore';
+import { Message, AgentSessionSummary, SessionContextCompaction } from './useAgentStore';
 
 interface AgentRunState {
   runId: string | null;
@@ -23,6 +23,7 @@ interface OutlineState {
   isCreationStreaming: boolean;
   creationExpandedBlocks: Record<string, boolean>;
   creationTodos: any[];
+  creationContextCompaction: SessionContextCompaction | null;
   isCreationTodoOpen: boolean;
   creationSelectedReferenceFiles: string[];
 
@@ -57,6 +58,7 @@ interface OutlineState {
   setIsCreationStreaming: (isStreaming: boolean) => void;
   setCreationExpandedBlocks: (blocks: Record<string, boolean> | ((blocks: Record<string, boolean>) => Record<string, boolean>)) => void;
   setCreationTodos: (todos: any[]) => void;
+  setCreationContextCompaction: (contextCompaction: SessionContextCompaction | null) => void;
   setIsCreationTodoOpen: (isOpen: boolean | ((isOpen: boolean) => boolean)) => void;
   setCreationSelectedReferenceFiles: (files: string[]) => void;
 
@@ -98,6 +100,7 @@ export const useOutlineStore = create<OutlineState>()(
       isCreationStreaming: false,
       creationExpandedBlocks: {},
       creationTodos: [],
+      creationContextCompaction: null,
       isCreationTodoOpen: false,
       creationSelectedReferenceFiles: [],
 
@@ -144,6 +147,7 @@ export const useOutlineStore = create<OutlineState>()(
         creationExpandedBlocks: typeof blocks === 'function' ? blocks(state.creationExpandedBlocks) : blocks,
       })),
       setCreationTodos: (creationTodos) => set({ creationTodos }),
+      setCreationContextCompaction: (creationContextCompaction) => set({ creationContextCompaction }),
       setIsCreationTodoOpen: (isOpen) => set((state) => ({
         isCreationTodoOpen: typeof isOpen === 'function' ? isOpen(state.isCreationTodoOpen) : isOpen,
       })),
@@ -174,6 +178,7 @@ export const useOutlineStore = create<OutlineState>()(
         isCreationStreaming: false,
         creationExpandedBlocks: {},
         creationTodos: [],
+        creationContextCompaction: null,
         isCreationTodoOpen: false,
         sessionId: `outline-${crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`}`,
         sessionTitle: '新对话',

@@ -22,7 +22,7 @@ pub use commands::fs::*;
 pub use commands::skills::*;
 pub use commands::versions::*;
 pub use commands::workspace::*;
-pub use models::{WritingStats, DailyActivity};
+pub use models::{DailyActivity, WritingStats};
 pub use tools::*;
 
 use tauri::{AppHandle, Manager};
@@ -109,6 +109,7 @@ fn build_full_system_prompt(
         system_prompt,
         workspace_path,
         messages: vec![],
+        context_compaction: None,
         selected_reference_files,
         allowed_tools: None,
         allowed_write_paths: None,

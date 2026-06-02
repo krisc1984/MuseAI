@@ -73,6 +73,242 @@ pub fn trim_history_to_context_budget(
     }
     selected
 }
+
+pub struct ContextCompactionPlan {
+    pub messages_to_summarize: Vec<ChatMessage>,
+    pub compacted_through_message_id: Option<String>,
+    pub compacted_through_index: usize,
+}
+
+pub fn should_compact_context(
+    system_prompt: &str,
+    history: &[ChatMessage],
+    max_context_tokens: Option<u32>,
+) -> bool {
+    let Some(max_context_tokens) = max_context_tokens else {
+        return false;
+    };
+    if max_context_tokens == 0 {
+        return false;
+    }
+    let total = approximate_token_count(system_prompt)
+        + history
+            .iter()
+            .map(chat_message_token_estimate)
+            .sum::<usize>();
+    total.saturating_mul(100) >= (max_context_tokens as usize).saturating_mul(95)
+}
+
+pub fn effective_history_with_compaction(
+    history: &[ChatMessage],
+    compaction: Option<&SessionContextCompaction>,
+) -> Vec<ChatMessage> {
+    let Some(compaction) = compaction.filter(|value| !value.summary.trim().is_empty()) else {
+        return history.to_vec();
+    };
+    let suffix_start = compaction_boundary_suffix_start(history, compaction);
+    let mut compacted = vec![ChatMessage {
+        id: None,
+        role: "user".to_string(),
+        content: format!("【本会话早期内容已压缩】\n{}", compaction.summary.trim()),
+        tool_call_id: None,
+        tool_calls: None,
+        thinking_blocks: None,
+    }];
+    compacted.extend(history.iter().skip(suffix_start).cloned());
+    compacted
+}
+
+pub fn plan_context_compaction(
+    system_prompt: &str,
+    history: &[ChatMessage],
+    existing_compaction: Option<&SessionContextCompaction>,
+    max_context_tokens: Option<u32>,
+) -> Option<ContextCompactionPlan> {
+    let effective_history = effective_history_with_compaction(history, existing_compaction);
+    if !should_compact_context(system_prompt, &effective_history, max_context_tokens) {
+        return None;
+    }
+
+    let compact_from = existing_compaction
+        .map(|compaction| compaction_boundary_suffix_start(history, compaction))
+        .unwrap_or(0);
+    let boundary = select_compaction_boundary(system_prompt, history, max_context_tokens)?;
+    if boundary < compact_from || history.len().saturating_sub(boundary + 1) < 2 {
+        return None;
+    }
+
+    let mut messages_to_summarize = Vec::new();
+    if let Some(compaction) = existing_compaction.filter(|value| !value.summary.trim().is_empty()) {
+        messages_to_summarize.push(ChatMessage {
+            id: None,
+            role: "user".to_string(),
+            content: format!("【上一轮压缩摘要】\n{}", compaction.summary.trim()),
+            tool_call_id: None,
+            tool_calls: None,
+            thinking_blocks: None,
+        });
+    }
+    messages_to_summarize.extend(history[compact_from..=boundary].iter().cloned());
+
+    Some(ContextCompactionPlan {
+        messages_to_summarize,
+        compacted_through_message_id: history[boundary].id.clone(),
+        compacted_through_index: boundary,
+    })
+}
+
+pub fn fallback_context_summary(messages: &[ChatMessage]) -> String {
+    let mut user_snippets = Vec::new();
+    let mut files_seen = Vec::new();
+    let mut errors = Vec::new();
+
+    for message in messages {
+        let text = message.content.trim();
+        if message.role == "user" && !text.is_empty() {
+            user_snippets.push(truncate_for_summary_line(text, 120));
+        }
+        for token in text
+            .split(|c: char| c.is_whitespace() || c == ',' || c == '，' || c == '：' || c == ':')
+        {
+            let trimmed = token.trim_matches(|c: char| {
+                c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']'
+            });
+            if looks_like_file_path(trimmed) && !files_seen.iter().any(|item| item == trimmed) {
+                files_seen.push(trimmed.to_string());
+            }
+        }
+        for line in text.lines() {
+            let lower = line.to_lowercase();
+            if lower.contains("error") || line.contains("错误") || line.contains("失败") {
+                errors.push(truncate_for_summary_line(line.trim(), 160));
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    if !user_snippets.is_empty() {
+        parts.push(format!(
+            "用户近期目标：{}",
+            user_snippets
+                .iter()
+                .rev()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("；")
+        ));
+    }
+    if !files_seen.is_empty() {
+        parts.push(format!(
+            "重要文件/路径：{}",
+            files_seen
+                .into_iter()
+                .take(12)
+                .collect::<Vec<_>>()
+                .join("，")
+        ));
+    }
+    if !errors.is_empty() {
+        parts.push(format!(
+            "已出现的问题：{}",
+            errors.into_iter().take(5).collect::<Vec<_>>().join("；")
+        ));
+    }
+    if parts.is_empty() {
+        "压缩摘要生成失败；旧上下文中没有可稳定提取的关键信息。".to_string()
+    } else {
+        format!(
+            "压缩摘要生成失败，以下为规则提取的关键信息：\n{}",
+            parts.join("\n")
+        )
+    }
+}
+
+fn select_compaction_boundary(
+    system_prompt: &str,
+    history: &[ChatMessage],
+    max_context_tokens: Option<u32>,
+) -> Option<usize> {
+    let max_context_tokens = max_context_tokens? as usize;
+    if history.len() < 6 {
+        return None;
+    }
+    let system_cost = approximate_token_count(system_prompt);
+    let recent_budget = max_context_tokens
+        .saturating_mul(35)
+        .checked_div(100)
+        .unwrap_or(0)
+        .saturating_sub(system_cost);
+    if recent_budget == 0 {
+        return None;
+    }
+
+    let mut start = history.len();
+    let mut total = 0usize;
+    let mut kept = 0usize;
+    for index in (0..history.len()).rev() {
+        let cost = chat_message_token_estimate(&history[index]);
+        if kept >= 4 && total + cost > recent_budget {
+            break;
+        }
+        total += cost;
+        kept += 1;
+        start = index;
+    }
+    if start == 0 || start >= history.len() {
+        return None;
+    }
+    while start > 0 && history[start].role == "tool" {
+        start -= 1;
+    }
+    if start == 0 {
+        return None;
+    }
+    Some(start - 1)
+}
+
+fn compaction_boundary_suffix_start(
+    history: &[ChatMessage],
+    compaction: &SessionContextCompaction,
+) -> usize {
+    if let Some(id) = compaction
+        .compacted_through_message_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    {
+        if let Some(index) = history
+            .iter()
+            .position(|message| message.id.as_deref() == Some(id))
+        {
+            return (index + 1).min(history.len());
+        }
+    }
+    (compaction.compacted_through_index + 1).min(history.len())
+}
+
+fn looks_like_file_path(value: &str) -> bool {
+    if value.len() < 3 || value.len() > 180 || !value.contains('.') {
+        return false;
+    }
+    value.contains('/')
+        || value.ends_with(".md")
+        || value.ends_with(".rs")
+        || value.ends_with(".tsx")
+        || value.ends_with(".ts")
+        || value.ends_with(".json")
+}
+
+fn truncate_for_summary_line(value: &str, max_chars: usize) -> String {
+    let mut result: String = value.chars().take(max_chars).collect();
+    if value.chars().count() > max_chars {
+        result.push_str("...");
+    }
+    result
+}
 pub fn openai_history_messages(system_prompt: &str, history: &[ChatMessage]) -> Vec<Value> {
     let mut messages = vec![json!({ "role": "system", "content": system_prompt })];
     for message in history {
@@ -153,19 +389,26 @@ pub fn anthropic_history_messages(history: &[ChatMessage]) -> Vec<Value> {
                     if let Some(blocks) = message.thinking_blocks.as_deref() {
                         for block in blocks {
                             if let Some(obj) = block.as_object() {
-                                if obj.get("type").and_then(Value::as_str) == Some("redacted_thinking") {
+                                if obj.get("type").and_then(Value::as_str)
+                                    == Some("redacted_thinking")
+                                {
                                     content.push(block.clone());
                                 } else {
                                     let mut thinking_block = serde_json::Map::new();
                                     thinking_block.insert("type".to_string(), json!("thinking"));
-                                    if let Some(thinking) = obj.get("content")
+                                    if let Some(thinking) = obj
+                                        .get("content")
                                         .or_else(|| obj.get("thinking"))
                                         .and_then(Value::as_str)
                                     {
-                                        thinking_block.insert("thinking".to_string(), json!(thinking));
+                                        thinking_block
+                                            .insert("thinking".to_string(), json!(thinking));
                                     }
-                                    if let Some(signature) = obj.get("signature").and_then(Value::as_str) {
-                                        thinking_block.insert("signature".to_string(), json!(signature));
+                                    if let Some(signature) =
+                                        obj.get("signature").and_then(Value::as_str)
+                                    {
+                                        thinking_block
+                                            .insert("signature".to_string(), json!(signature));
                                     }
                                     content.push(Value::Object(thinking_block));
                                 }
@@ -376,6 +619,28 @@ pub fn parse_anthropic_stream_event(data: &str) -> Option<AnthropicStreamEvent> 
 mod tests {
     use super::*;
 
+    fn msg(id: &str, role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: Some(id.to_string()),
+            role: role.to_string(),
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            thinking_blocks: None,
+        }
+    }
+
+    fn tool_result(id: &str, call_id: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: Some(id.to_string()),
+            role: "tool".to_string(),
+            content: content.to_string(),
+            tool_call_id: Some(call_id.to_string()),
+            tool_calls: None,
+            thinking_blocks: None,
+        }
+    }
+
     #[test]
     fn approximate_token_count_basic() {
         assert_eq!(approximate_token_count(""), 0);
@@ -389,6 +654,7 @@ mod tests {
     #[test]
     fn chat_message_token_estimate_basic() {
         let msg = ChatMessage {
+            id: None,
             role: "user".to_string(),
             content: "hello world".to_string(),
             tool_call_id: None,
@@ -402,16 +668,15 @@ mod tests {
     #[test]
     fn chat_message_token_estimate_with_tool_calls() {
         let msg = ChatMessage {
+            id: None,
             role: "assistant".to_string(),
             content: "ok".to_string(),
             tool_call_id: None,
-            tool_calls: Some(vec![
-                ChatToolCall {
-                    id: "call_1".to_string(),
-                    name: "read".to_string(),
-                    arguments: "{\"file_path\": \"test.md\"}".to_string(),
-                },
-            ]),
+            tool_calls: Some(vec![ChatToolCall {
+                id: "call_1".to_string(),
+                name: "read".to_string(),
+                arguments: "{\"file_path\": \"test.md\"}".to_string(),
+            }]),
             thinking_blocks: None,
         };
         let estimate = chat_message_token_estimate(&msg);
@@ -421,18 +686,14 @@ mod tests {
 
     #[test]
     fn trim_history_to_context_budget_no_budget() {
-        let history = vec![
-            ChatMessage { role: "user".to_string(), content: "hi".to_string(), tool_call_id: None, tool_calls: None, thinking_blocks: None },
-        ];
+        let history = vec![msg("u1", "user", "hi")];
         let result = trim_history_to_context_budget("system", &history, None);
         assert_eq!(result.len(), 1);
     }
 
     #[test]
     fn trim_history_to_context_budget_zero() {
-        let history = vec![
-            ChatMessage { role: "user".to_string(), content: "hi".to_string(), tool_call_id: None, tool_calls: None, thinking_blocks: None },
-        ];
+        let history = vec![msg("u1", "user", "hi")];
         let result = trim_history_to_context_budget("system", &history, Some(1));
         assert!(result.is_empty());
     }
@@ -440,8 +701,8 @@ mod tests {
     #[test]
     fn trim_history_to_context_budget_trims() {
         let history = vec![
-            ChatMessage { role: "user".to_string(), content: "message one".to_string(), tool_call_id: None, tool_calls: None, thinking_blocks: None },
-            ChatMessage { role: "assistant".to_string(), content: "message two".to_string(), tool_call_id: None, tool_calls: None, thinking_blocks: None },
+            msg("u1", "user", "message one"),
+            msg("a1", "assistant", "message two"),
         ];
         // System prompt is "sys" (3 chars -> 0 tokens after (3+3)/4=1)
         // Budget = 10 - 1 = 9
@@ -454,10 +715,7 @@ mod tests {
 
     #[test]
     fn trim_history_to_context_budget_strips_leading_tool() {
-        let history = vec![
-            ChatMessage { role: "tool".to_string(), content: "result".to_string(), tool_call_id: Some("id".to_string()), tool_calls: None, thinking_blocks: None },
-            ChatMessage { role: "user".to_string(), content: "hi".to_string(), tool_call_id: None, tool_calls: None, thinking_blocks: None },
-        ];
+        let history = vec![tool_result("t1", "id", "result"), msg("u1", "user", "hi")];
         let result = trim_history_to_context_budget("sys", &history, Some(1000));
         // Leading tool messages should be stripped
         assert_eq!(result.len(), 1);
@@ -466,16 +724,160 @@ mod tests {
 
     #[test]
     fn build_endpoint_openai() {
-        assert_eq!(build_endpoint("https://api.openai.com", "v1/chat/completions", "chat/completions"), "https://api.openai.com/v1/chat/completions");
-        assert_eq!(build_endpoint("https://api.openai.com/", "v1/chat/completions", "chat/completions"), "https://api.openai.com/v1/chat/completions");
-        assert_eq!(build_endpoint("https://api.openai.com/v1", "v1/chat/completions", "chat/completions"), "https://api.openai.com/v1/chat/completions");
-        assert_eq!(build_endpoint("https://api.openai.com/v1/chat/completions", "v1/chat/completions", "chat/completions"), "https://api.openai.com/v1/chat/completions");
+        assert_eq!(
+            build_endpoint(
+                "https://api.openai.com",
+                "v1/chat/completions",
+                "chat/completions"
+            ),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            build_endpoint(
+                "https://api.openai.com/",
+                "v1/chat/completions",
+                "chat/completions"
+            ),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            build_endpoint(
+                "https://api.openai.com/v1",
+                "v1/chat/completions",
+                "chat/completions"
+            ),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            build_endpoint(
+                "https://api.openai.com/v1/chat/completions",
+                "v1/chat/completions",
+                "chat/completions"
+            ),
+            "https://api.openai.com/v1/chat/completions"
+        );
     }
 
     #[test]
     fn build_endpoint_anthropic() {
-        assert_eq!(build_endpoint("https://api.anthropic.com", "v1/messages", "messages"), "https://api.anthropic.com/v1/messages");
-        assert_eq!(build_endpoint("https://api.anthropic.com/v1", "v1/messages", "messages"), "https://api.anthropic.com/v1/messages");
+        assert_eq!(
+            build_endpoint("https://api.anthropic.com", "v1/messages", "messages"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            build_endpoint("https://api.anthropic.com/v1", "v1/messages", "messages"),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn should_compact_context_uses_95_percent_threshold() {
+        let history = vec![
+            msg("u1", "user", &"a".repeat(120)),
+            msg("a1", "assistant", &"b".repeat(120)),
+        ];
+
+        assert!(!should_compact_context("", &history, Some(100)));
+        assert!(should_compact_context("", &history, Some(80)));
+    }
+
+    #[test]
+    fn plan_context_compaction_keeps_tool_pair_together() {
+        let mut assistant_tool = msg("a-tool", "assistant", "");
+        assistant_tool.tool_calls = Some(vec![ChatToolCall {
+            id: "call_1".to_string(),
+            name: "read".to_string(),
+            arguments: "{}".to_string(),
+        }]);
+        let history = vec![
+            msg("u1", "user", &"a".repeat(120)),
+            msg("a1", "assistant", &"b".repeat(120)),
+            msg("u2", "user", &"c".repeat(120)),
+            assistant_tool,
+            tool_result("tool-1", "call_1", &"tool output".repeat(20)),
+            msg("u3", "user", "continue"),
+            msg("a3", "assistant", "ok"),
+        ];
+
+        let plan = plan_context_compaction("", &history, None, Some(140)).unwrap();
+        let compacted = SessionContextCompaction {
+            summary: "摘要".to_string(),
+            compacted_through_message_id: plan.compacted_through_message_id,
+            compacted_through_index: plan.compacted_through_index,
+            source_message_count: history.len(),
+            updated_at: 1,
+        };
+        let effective = effective_history_with_compaction(&history, Some(&compacted));
+
+        assert_ne!(
+            effective.get(1).map(|message| message.role.as_str()),
+            Some("tool")
+        );
+        assert!(plan.compacted_through_index < history.len() - 1);
+    }
+
+    #[test]
+    fn effective_history_uses_existing_compaction_summary_and_recent_messages() {
+        let history = vec![
+            msg("u1", "user", "old"),
+            msg("a1", "assistant", "old answer"),
+            msg("u2", "user", "recent"),
+        ];
+        let compaction = SessionContextCompaction {
+            summary: "旧内容摘要".to_string(),
+            compacted_through_message_id: Some("a1".to_string()),
+            compacted_through_index: 1,
+            source_message_count: 3,
+            updated_at: 1,
+        };
+
+        let effective = effective_history_with_compaction(&history, Some(&compaction));
+
+        assert_eq!(effective.len(), 2);
+        assert!(effective[0].content.contains("旧内容摘要"));
+        assert_eq!(effective[1].id.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn repeated_compaction_includes_previous_summary_and_new_messages() {
+        let history = vec![
+            msg("u1", "user", &"a".repeat(120)),
+            msg("a1", "assistant", &"b".repeat(120)),
+            msg("u2", "user", &"c".repeat(120)),
+            msg("a2", "assistant", &"d".repeat(120)),
+            msg("u3", "user", &"e".repeat(120)),
+            msg("a3", "assistant", &"f".repeat(120)),
+            msg("u4", "user", "recent"),
+            msg("a4", "assistant", "ok"),
+        ];
+        let existing = SessionContextCompaction {
+            summary: "第一轮摘要".to_string(),
+            compacted_through_message_id: Some("a1".to_string()),
+            compacted_through_index: 1,
+            source_message_count: 6,
+            updated_at: 1,
+        };
+
+        let plan = plan_context_compaction("", &history, Some(&existing), Some(140)).unwrap();
+
+        assert!(plan.messages_to_summarize[0].content.contains("第一轮摘要"));
+        assert_eq!(plan.messages_to_summarize[1].id.as_deref(), Some("u2"));
+        assert!(plan.compacted_through_index > existing.compacted_through_index);
+    }
+
+    #[test]
+    fn fallback_context_summary_extracts_files_errors_and_user_intent() {
+        let history = vec![
+            msg("u1", "user", "请修改 /tmp/story.md，并注意前面确认过的风格"),
+            msg("a1", "assistant", "Error: failed to read src/main.rs"),
+        ];
+
+        let summary = fallback_context_summary(&history);
+
+        assert!(summary.contains("/tmp/story.md"));
+        assert!(summary.contains("src/main.rs"));
+        assert!(summary.contains("Error"));
+        assert!(summary.contains("用户近期目标"));
     }
 
     #[test]
@@ -526,7 +928,8 @@ mod tests {
 
     #[test]
     fn parse_openai_stream_event_with_tool_call() {
-        let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read"}}]}}]}"#;
+        let data =
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read"}}]}}]}"#;
         let event = parse_openai_stream_event(data).unwrap();
         assert_eq!(event.tool_call_chunks.len(), 1);
         assert_eq!(event.tool_call_chunks[0].index, 0);
@@ -535,7 +938,8 @@ mod tests {
 
     #[test]
     fn parse_anthropic_stream_event_thinking_start() {
-        let data = r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#;
+        let data =
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#;
         match parse_anthropic_stream_event(data) {
             Some(AnthropicStreamEvent::ThinkingStart { index }) => assert_eq!(index, 0),
             _ => panic!("Expected ThinkingStart"),
@@ -572,9 +976,7 @@ mod tests {
 
     #[test]
     fn openai_history_messages_basic() {
-        let history = vec![
-            ChatMessage { role: "user".to_string(), content: "hi".to_string(), tool_call_id: None, tool_calls: None, thinking_blocks: None },
-        ];
+        let history = vec![msg("u1", "user", "hi")];
         let messages = openai_history_messages("system prompt", &history);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "system");
@@ -587,6 +989,7 @@ mod tests {
     fn openai_history_messages_with_tool_calls() {
         let history = vec![
             ChatMessage {
+                id: Some("a1".to_string()),
                 role: "assistant".to_string(),
                 content: "".to_string(),
                 tool_call_id: None,
@@ -597,7 +1000,7 @@ mod tests {
                 }]),
                 thinking_blocks: None,
             },
-            ChatMessage { role: "tool".to_string(), content: "result".to_string(), tool_call_id: Some("call_1".to_string()), tool_calls: None, thinking_blocks: None },
+            tool_result("t1", "call_1", "result"),
         ];
         let messages = openai_history_messages("sys", &history);
         assert_eq!(messages.len(), 3);
@@ -609,9 +1012,7 @@ mod tests {
 
     #[test]
     fn anthropic_history_messages_basic() {
-        let history = vec![
-            ChatMessage { role: "user".to_string(), content: "hi".to_string(), tool_call_id: None, tool_calls: None, thinking_blocks: None },
-        ];
+        let history = vec![msg("u1", "user", "hi")];
         let messages = anthropic_history_messages(&history);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"], "user");

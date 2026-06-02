@@ -29,6 +29,14 @@ export interface AgentTodo {
   status: string;
 }
 
+export interface SessionContextCompaction {
+  summary: string;
+  compactedThroughMessageId?: string | null;
+  compactedThroughIndex: number;
+  sourceMessageCount: number;
+  updatedAt: number;
+}
+
 export interface SkillDefinition {
   name: string;
   description: string;
@@ -48,6 +56,7 @@ export interface AgentSessionRecord extends AgentSessionSummary {
   selectedReferenceFiles: string[];
   selectedOutlineFile?: string | null;
   todos: AgentTodo[];
+  contextCompaction?: SessionContextCompaction | null;
   isArchived?: boolean;
   characterCardId?: string | null;
   characterCardIds?: string[] | null;
@@ -69,6 +78,7 @@ interface AgentStoreState {
   selectedReferenceFiles: string[];
   selectedOutlineFile: string | null;
   todos: AgentTodo[];
+  contextCompaction: SessionContextCompaction | null;
   isTodoOpen: boolean;
   sessions: AgentSessionSummary[];
   skills: SkillDefinition[];
@@ -83,6 +93,7 @@ interface AgentStoreState {
   setSelectedReferenceFiles: (files: string[]) => void;
   setSelectedOutlineFile: (file: string | null) => void;
   setTodos: (todos: AgentTodo[]) => void;
+  setContextCompaction: (contextCompaction: SessionContextCompaction | null) => void;
   setIsTodoOpen: (isOpen: boolean | ((prev: boolean) => boolean)) => void;
   setSessions: (sessions: AgentSessionSummary[]) => void;
   setSkills: (skills: SkillDefinition[]) => void;
@@ -105,6 +116,7 @@ export const useAgentStore = create<AgentStoreState>()(
       selectedReferenceFiles: [],
       selectedOutlineFile: null,
       todos: [],
+      contextCompaction: null,
       isTodoOpen: false,
       sessions: [],
       skills: [],
@@ -123,6 +135,7 @@ export const useAgentStore = create<AgentStoreState>()(
       setSelectedReferenceFiles: (selectedReferenceFiles) => set({ selectedReferenceFiles }),
       setSelectedOutlineFile: (selectedOutlineFile) => set({ selectedOutlineFile }),
       setTodos: (todos) => set({ todos }),
+      setContextCompaction: (contextCompaction) => set({ contextCompaction }),
       setIsTodoOpen: (updater) => set((state) => ({
         isTodoOpen: typeof updater === 'function' ? updater(state.isTodoOpen) : updater,
       })),
@@ -142,6 +155,7 @@ export const useAgentStore = create<AgentStoreState>()(
           selectedReferenceFiles: state.selectedReferenceFiles,
           selectedOutlineFile: state.selectedOutlineFile,
           todos: [],
+          contextCompaction: null,
           isTodoOpen: false,
           sessionId: createSessionId(),
           sessionTitle: '新对话',

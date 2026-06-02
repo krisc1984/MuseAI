@@ -6,17 +6,18 @@ import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSettingsStore } from '../stores/useSettingsStore';
-import { Message, AgentToolEntry, AgentSessionSummary, AgentSessionRecord } from '../stores/useAgentStore';
+import { Message, AgentToolEntry, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction } from '../stores/useAgentStore';
 
 interface ChatStreamEvent {
   runId: string;
-  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'done' | 'error';
+  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'context_compacted' | 'done' | 'error';
   delta?: string;
   message?: string;
   toolCallId?: string;
   toolName?: string;
   toolStatus?: string;
   toolArguments?: string;
+  contextCompaction?: SessionContextCompaction;
 }
 
 interface DeAiAgentChatProps {
@@ -83,8 +84,10 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
   const [sessionId, setSessionId] = useState(() => `deai-${crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`}`);
   const [sessionTitle, setSessionTitle] = useState('新对话');
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
+  const [contextCompaction, setContextCompaction] = useState<SessionContextCompaction | null>(null);
   const sessionIdRef = useRef(sessionId);
   const sessionTitleRef = useRef(sessionTitle);
+  const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
 
   useEffect(() => {
     const build = async () => {
@@ -108,6 +111,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
   useEffect(() => { onRunningChangeRef.current = onRunningChange; }, [onRunningChange]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
+  useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   const setSyncedMessages = (updater: Message[] | ((messages: Message[]) => Message[])) => {
@@ -144,6 +148,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
           selectedReferenceFiles: [],
           selectedOutlineFile: null,
           todos: [],
+          contextCompaction: contextCompactionRef.current,
         },
       });
       await refreshSessions();
@@ -160,6 +165,8 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
       setSessionId(session.id);
       setSessionTitle(session.title);
       setMessages(session.messages);
+      contextCompactionRef.current = session.contextCompaction ?? null;
+      setContextCompaction(session.contextCompaction ?? null);
       setExpandedBlocks({});
       setInput('');
       onRunningChangeRef.current?.(false);
@@ -194,6 +201,8 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
     setMessages([]);
     setInput('');
     setExpandedBlocks({});
+    contextCompactionRef.current = null;
+    setContextCompaction(null);
     setSessionId(`deai-${crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`}`);
     setSessionTitle('新对话');
   };
@@ -299,6 +308,12 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
           result: payload.message || payload.delta || '',
           status: payload.toolStatus || (payload.eventType === 'tool_end' ? 'success' : 'running'),
         }, payload.eventType === 'tool_end' ? 'end' : 'output'));
+        return;
+      }
+
+      if (payload.eventType === 'context_compacted' && payload.contextCompaction) {
+        contextCompactionRef.current = payload.contextCompaction;
+        setContextCompaction(payload.contextCompaction);
         return;
       }
 
@@ -415,6 +430,8 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
 
     if (shouldResetContext) {
       setExpandedBlocks({});
+      contextCompactionRef.current = null;
+      setContextCompaction(null);
     }
     accumulatedContentRef.current = '';
     messagesRef.current = nextMessages;
@@ -464,10 +481,12 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
           systemPrompt: systemPrompt,
           workspacePath: settings.worksDirectory,
           messages: [...historyMessages, userMessage].map(m => ({
-            role: m.role,
+            id: m.id,
+            role: m.role === 'user' ? 'user' : 'assistant',
             content: m.content,
             thinkingBlocks: m.thinkingBlocks,
           })),
+          contextCompaction: shouldResetContext ? null : contextCompactionRef.current,
           allowedTools: allowedTools,
           allowedWritePaths: resolvedAllowedWritePaths,
         },

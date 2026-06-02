@@ -1,5 +1,7 @@
 use serde_json::{json, Value};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
 use tauri::AppHandle;
 use uuid::Uuid;
 
@@ -220,16 +222,24 @@ pub fn start_chat_completion_stream(
     state: tauri::State<'_, ActiveStreams>,
 ) -> Result<String, String> {
     if request.api_key.trim().is_empty() {
-        return Err(String::from("API Key 不能为空"));
+        let error = String::from("API Key 不能为空");
+        log_agent_run_error(&app, None, &error);
+        return Err(error);
     }
     if request.model.trim().is_empty() {
-        return Err(String::from("模型名称不能为空"));
+        let error = String::from("模型名称不能为空");
+        log_agent_run_error(&app, None, &error);
+        return Err(error);
     }
     if request.base_url.trim().is_empty() {
-        return Err(String::from("接口地址不能为空"));
+        let error = String::from("接口地址不能为空");
+        log_agent_run_error(&app, None, &error);
+        return Err(error);
     }
     if request.messages.is_empty() {
-        return Err(String::from("消息不能为空"));
+        let error = String::from("消息不能为空");
+        log_agent_run_error(&app, None, &error);
+        return Err(error);
     }
 
     let reference_context = build_reference_context(&request);
@@ -272,14 +282,17 @@ pub fn start_chat_completion_stream(
                 None,
                 &AgentRunOptions::parent(),
             ),
-            Err(error) => emit_chat_event(
-                &app,
-                &spawned_run_id,
-                "error",
-                None,
-                Some(error),
-                &AgentRunOptions::parent(),
-            ),
+            Err(error) => {
+                log_agent_run_error(&app, Some(&spawned_run_id), &error);
+                emit_chat_event(
+                    &app,
+                    &spawned_run_id,
+                    "error",
+                    None,
+                    Some(error),
+                    &AgentRunOptions::parent(),
+                )
+            }
         }
 
         if let Some(active_streams) = state_app.try_state::<ActiveStreams>() {
@@ -301,6 +314,37 @@ pub fn stop_chat_stream(
         handle.abort();
     }
     Ok(())
+}
+
+fn log_agent_run_error(app: &AppHandle, run_id: Option<&str>, error: &str) {
+    let Ok(doc_dir) = app.path().document_dir() else {
+        return;
+    };
+    let museai_dir = doc_dir.join("MuseAI");
+    let _ = append_agent_run_error_log(&museai_dir, run_id, error, now_millis().unwrap_or(0));
+}
+
+fn append_agent_run_error_log(
+    museai_dir: &Path,
+    run_id: Option<&str>,
+    error: &str,
+    timestamp: u64,
+) -> Result<(), String> {
+    let log_dir = museai_dir.join(".logs");
+    fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    let log_path = log_dir.join("agent-runs.log");
+    let entry = json!({
+        "timestamp": timestamp,
+        "runId": run_id,
+        "event": "error",
+        "message": error,
+    });
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map_err(|e| e.to_string())?;
+    writeln!(file, "{}", entry).map_err(|e| e.to_string())
 }
 
 fn clean_json_response(text: String) -> String {
@@ -789,7 +833,39 @@ pub async fn test_llm_connection(request: TestConnectionRequest) -> Result<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::clean_json_response;
+    use super::{append_agent_run_error_log, clean_json_response};
+    use serde_json::Value;
+    use std::env;
+    use std::fs;
+    use std::time::SystemTime;
+
+    fn temp_museai_dir(name: &str) -> std::path::PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_millis();
+        env::temp_dir().join(format!("museai_agent_log_test_{}_{}", millis, name))
+    }
+
+    #[test]
+    fn append_agent_run_error_log_writes_jsonl_under_logs_dir() {
+        let dir = temp_museai_dir("error");
+
+        append_agent_run_error_log(&dir, Some("run-123"), "模型请求失败", 12345)
+            .expect("log should be written");
+
+        let log_path = dir.join(".logs").join("agent-runs.log");
+        let text = fs::read_to_string(&log_path).expect("log file should exist");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let entry: Value = serde_json::from_str(lines[0]).expect("log line should be json");
+        assert_eq!(entry["timestamp"], 12345);
+        assert_eq!(entry["runId"], "run-123");
+        assert_eq!(entry["event"], "error");
+        assert_eq!(entry["message"], "模型请求失败");
+
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn clean_json_response_extracts_json_object() {
@@ -843,4 +919,3 @@ plain text
         assert_eq!(clean_json_response(input), "just plain text");
     }
 }
-

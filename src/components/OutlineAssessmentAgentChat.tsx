@@ -267,7 +267,8 @@ const OutlineAssessmentAgentChat: React.FC<OutlineAssessmentAgentChatProps> = ({
   const handleSend = async (overrideInput?: string) => {
     let resolvedInput = overrideInput;
     let resolvedAllowedWritePaths: string[] | undefined;
-    if (onBeforeStart) {
+    const isFollowUp = overrideInput !== undefined;
+    if (onBeforeStart && !isFollowUp) {
       try {
         const result = await onBeforeStart();
         if (result === undefined) {
@@ -293,7 +294,7 @@ const OutlineAssessmentAgentChat: React.FC<OutlineAssessmentAgentChatProps> = ({
     if (!textToSend || isRunning) {
       return;
     }
-    const shouldResetContext = !resolvedInput;
+    const shouldResetContext = !isFollowUp;
     stopRequestedRef.current = false;
 
     const userMessage: Message = {

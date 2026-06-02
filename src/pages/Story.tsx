@@ -25,17 +25,18 @@ import remarkGfm from 'remark-gfm';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
-import { Message, AgentSessionSummary, AgentSessionRecord } from '../stores/useAgentStore';
+import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction } from '../stores/useAgentStore';
 
 interface ChatStreamEvent {
   runId: string;
-  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'done' | 'error';
+  eventType: 'start' | 'delta' | 'thinking_delta' | 'thinking_signature' | 'tool_start' | 'tool_output' | 'tool_end' | 'todo_update' | 'context_compacted' | 'done' | 'error';
   delta?: string;
   message?: string;
   toolCallId?: string;
   toolName?: string;
   toolStatus?: string;
   toolArguments?: string;
+  contextCompaction?: SessionContextCompaction;
 }
 
 const USER_INFO_LABELS: Record<string, string> = {
@@ -121,6 +122,7 @@ const Story: React.FC = () => {
     activeRun, setActiveRun,
     isSessionArchived, setIsSessionArchived,
     initialPlot, setInitialPlot,
+    contextCompaction, setContextCompaction,
     createNewSession
   } = useStoryStore();
 
@@ -136,6 +138,7 @@ const Story: React.FC = () => {
   const sessionTitleRef = useRef(sessionTitle);
   const isSessionArchivedRef = useRef(isSessionArchived);
   const selectedCharacterCardIdsRef = useRef(selectedCharacterCardIds);
+  const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
 
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -160,6 +163,7 @@ const Story: React.FC = () => {
   useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
   useEffect(() => { isSessionArchivedRef.current = isSessionArchived; }, [isSessionArchived]);
   useEffect(() => { selectedCharacterCardIdsRef.current = selectedCharacterCardIds; }, [selectedCharacterCardIds]);
+  useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
 
   useEffect(() => {
     void refreshSessions();
@@ -231,6 +235,12 @@ const Story: React.FC = () => {
           }
           return { ...msg, thinkingBlocks: newThinkingBlocks };
         }));
+        return;
+      }
+
+      if (payload.eventType === 'context_compacted' && payload.contextCompaction) {
+        contextCompactionRef.current = payload.contextCompaction;
+        setContextCompaction(payload.contextCompaction);
         return;
       }
 
@@ -315,6 +325,8 @@ const Story: React.FC = () => {
     };
 
     const nextMessages = [userMessage, pendingAgentMessage];
+    contextCompactionRef.current = null;
+    setContextCompaction(null);
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
 
@@ -358,7 +370,8 @@ const Story: React.FC = () => {
           thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
-          messages: [{ role: 'user', content: formattedPlot }],
+          messages: [{ id: userMessage.id, role: 'user', content: formattedPlot }],
+          contextCompaction: null,
           selectedReferenceFiles: [],
           allowedTools: []
         }
@@ -415,6 +428,7 @@ const Story: React.FC = () => {
 
     try {
       const modelMessages = nextMessages.slice(0, -1).map(msg => ({
+        id: msg.id,
         role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
         content: msg.content
       }));
@@ -432,6 +446,7 @@ const Story: React.FC = () => {
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
           messages: modelMessages,
+          contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: [],
           allowedTools: []
         }
@@ -510,6 +525,7 @@ const Story: React.FC = () => {
 
       try {
         const modelMessages = baseMessages.map(m => ({
+          id: m.id,
           role: m.role === 'user' ? 'user' as const : 'assistant' as const,
           content: m.content
         }));
@@ -527,6 +543,7 @@ const Story: React.FC = () => {
             systemPrompt: effectiveSystemPrompt,
             workspacePath: null,
             messages: modelMessages,
+            contextCompaction: contextCompactionRef.current,
             selectedReferenceFiles: [],
             allowedTools: []
           }
@@ -571,6 +588,7 @@ const Story: React.FC = () => {
 
     try {
       const modelMessages = baseMessages.map(msg => ({
+        id: msg.id,
         role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
         content: msg.content
       }));
@@ -588,6 +606,7 @@ const Story: React.FC = () => {
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
           messages: modelMessages,
+          contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: [],
           allowedTools: []
         }
@@ -634,6 +653,7 @@ const Story: React.FC = () => {
           selectedReferenceFiles: [],
           selectedOutlineFile: null,
           todos: [],
+          contextCompaction: contextCompactionRef.current,
           isArchived: isSessionArchivedRef.current,
           characterCardIds: selectedCharacterCardIdsRef.current
         }
@@ -652,6 +672,8 @@ const Story: React.FC = () => {
       setSessionId(session.id);
       setSessionTitle(session.title);
       setMessages(session.messages);
+      contextCompactionRef.current = session.contextCompaction ?? null;
+      setContextCompaction(session.contextCompaction ?? null);
       setIsStreaming(false);
       setInput('');
       setIsSessionArchived(session.isArchived ?? false);

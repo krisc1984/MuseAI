@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Message, AgentSessionSummary } from './useAgentStore';
+import { Message, AgentSessionSummary, SessionContextCompaction } from './useAgentStore';
 
 function createSessionId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -23,6 +23,7 @@ interface StoryState {
   activeRun: { runId: string | null; messageId: string | null };
   isSessionArchived: boolean;
   initialPlot: string;
+  contextCompaction: SessionContextCompaction | null;
 
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setInput: (input: string) => void;
@@ -37,6 +38,7 @@ interface StoryState {
   setActiveRun: (run: { runId: string | null; messageId: string | null }) => void;
   setIsSessionArchived: (val: boolean) => void;
   setInitialPlot: (plot: string) => void;
+  setContextCompaction: (contextCompaction: SessionContextCompaction | null) => void;
   createNewSession: () => void;
 }
 
@@ -56,6 +58,7 @@ export const useStoryStore = create<StoryState>()(
       activeRun: { runId: null, messageId: null },
       isSessionArchived: false,
       initialPlot: '',
+      contextCompaction: null,
 
       setMessages: (updater) => set((state) => ({
         messages: typeof updater === 'function' ? updater(state.messages) : updater,
@@ -74,6 +77,7 @@ export const useStoryStore = create<StoryState>()(
       setActiveRun: (activeRun) => set({ activeRun }),
       setIsSessionArchived: (isSessionArchived) => set({ isSessionArchived }),
       setInitialPlot: (initialPlot) => set({ initialPlot }),
+      setContextCompaction: (contextCompaction) => set({ contextCompaction }),
 
       createNewSession: () => {
         set(() => ({
@@ -87,6 +91,7 @@ export const useStoryStore = create<StoryState>()(
           sessionTitle: '新故事',
           isSessionArchived: false,
           initialPlot: '',
+          contextCompaction: null,
         }));
       },
     }),
