@@ -75,6 +75,22 @@ pub struct ChatStreamRequest {
     pub selected_reference_files: Option<Vec<String>>,
     pub allowed_tools: Option<Vec<String>>,
     pub allowed_write_paths: Option<Vec<String>>,
+    pub role_play_context: Option<RolePlayContext>,
+}
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RolePlayContext {
+    pub chat_system_prompt: String,
+    pub world_book_content: Option<String>,
+    pub user_info: Option<Value>,
+    pub character_cards: Vec<RolePlayCharacterCard>,
+}
+#[derive(Clone, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RolePlayCharacterCard {
+    pub id: String,
+    pub name: String,
+    pub content: String,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +156,8 @@ pub struct AgentSessionRecord {
     pub is_archived: Option<bool>,
     pub character_card_id: Option<String>,
     pub character_card_ids: Option<Vec<String>>,
+    pub selected_world_book_id: Option<String>,
+    pub dynamic_role_loading_enabled: Option<bool>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +167,8 @@ pub struct AgentSessionSummary {
     pub saved_at: u64,
     pub character_card_id: Option<String>,
     pub character_card_ids: Option<Vec<String>>,
+    pub selected_world_book_id: Option<String>,
+    pub dynamic_role_loading_enabled: Option<bool>,
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]

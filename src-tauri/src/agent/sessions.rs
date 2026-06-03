@@ -48,6 +48,8 @@ pub fn list_agent_sessions(
             saved_at: record.saved_at,
             character_card_id: record.character_card_id,
             character_card_ids: record.character_card_ids,
+            selected_world_book_id: record.selected_world_book_id,
+            dynamic_role_loading_enabled: record.dynamic_role_loading_enabled,
         });
     }
 
@@ -77,6 +79,8 @@ pub fn save_agent_session(
         saved_at: session.saved_at,
         character_card_id: session.character_card_id,
         character_card_ids: session.character_card_ids,
+        selected_world_book_id: session.selected_world_book_id,
+        dynamic_role_loading_enabled: session.dynamic_role_loading_enabled,
     })
 }
 #[tauri::command]
@@ -205,6 +209,8 @@ pub fn update_agent_session_title(
         saved_at: record.saved_at,
         character_card_id: record.character_card_id,
         character_card_ids: record.character_card_ids,
+        selected_world_book_id: record.selected_world_book_id,
+        dynamic_role_loading_enabled: record.dynamic_role_loading_enabled,
     })
 }
 #[tauri::command]

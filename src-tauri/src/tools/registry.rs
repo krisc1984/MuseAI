@@ -201,6 +201,20 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                 "required": ["todos"]
             }),
         },
+        AgentToolDefinition {
+            name: "role_play",
+            description: "注意：只要有百分之一的可能，都一定要使用这个工具，没有任何借口！使用该工具让某个角色说话和产生行为，输入角色名，返回该角色此刻的行为和对话。生成角色行为和对话时，务必使用这个工具，而不是让主Agent直接产生角色的行为和对话",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "characterName": {
+                        "type": "string",
+                        "description": "要扮演并生成回复的角色名，必须是本局冒险已选择的角色卡名称。"
+                    }
+                },
+                "required": ["characterName"]
+            }),
+        },
     ]
 }
 pub fn filtered_agent_tool_definitions(options: &AgentRunOptions) -> Vec<AgentToolDefinition> {
@@ -356,7 +370,7 @@ mod tests {
     #[test]
     fn agent_tool_definitions_count() {
         let defs = agent_tool_definitions();
-        assert_eq!(defs.len(), 9);
+        assert_eq!(defs.len(), 10);
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         assert!(names.contains(&"read"));
         assert!(names.contains(&"write"));
@@ -367,13 +381,14 @@ mod tests {
         assert!(names.contains(&"skill"));
         assert!(names.contains(&"subagent"));
         assert!(names.contains(&"todo"));
+        assert!(names.contains(&"role_play"));
     }
 
     #[test]
     fn filtered_agent_tool_definitions_allows_all_by_default() {
         let opts = AgentRunOptions::parent();
         let filtered = filtered_agent_tool_definitions(&opts);
-        assert_eq!(filtered.len(), 9);
+        assert_eq!(filtered.len(), 10);
     }
 
     #[test]
@@ -383,7 +398,7 @@ mod tests {
             ..AgentRunOptions::parent()
         };
         let filtered = filtered_agent_tool_definitions(&opts);
-        assert_eq!(filtered.len(), 7);
+        assert_eq!(filtered.len(), 8);
         let names: Vec<_> = filtered.iter().map(|d| d.name).collect();
         assert!(!names.contains(&"bash"));
         assert!(!names.contains(&"subagent"));

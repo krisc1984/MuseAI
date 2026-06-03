@@ -27,6 +27,7 @@ import {
   defaultOutlineAssessmentPrompt,
   defaultPartnerChatPrompt,
   defaultStoryAgentPrompt,
+  defaultStoryDynamicAgentPrompt,
 } from '../stores/useSettingsStore';
 
 const { Title } = Typography;
@@ -71,6 +72,7 @@ interface AgentSettingCardProps {
   onSavePrompt: (prompt: string) => void;
   onResetPrompt: () => void;
   helpText: string;
+  showModelControls?: boolean;
 }
 
 const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
@@ -81,6 +83,7 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   onSavePrompt,
   onResetPrompt,
   helpText,
+  showModelControls = true,
 }) => {
   const store = useSettingsStore();
   const [form] = Form.useForm();
@@ -102,12 +105,14 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   }, [agentConfig, currentPrompt]);
 
   const handleSave = (values: any) => {
-    store.setAgentConfig(agentId, {
-      temperature: values.temperature,
-      maxOutputTokens: values.maxOutputTokens,
-      maxContextTokens: values.maxContextTokens,
-      thinkingDepth: values.thinkingDepth,
-    });
+    if (showModelControls) {
+      store.setAgentConfig(agentId, {
+        temperature: values.temperature,
+        maxOutputTokens: values.maxOutputTokens,
+        maxContextTokens: values.maxContextTokens,
+        thinkingDepth: values.thinkingDepth,
+      });
+    }
     onSavePrompt(values.prompt);
     message.success(`已保存 ${title} 配置`);
   };
@@ -120,12 +125,14 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
       thinkingDepth: 'off',
       prompt: defaultPrompt,
     });
-    store.setAgentConfig(agentId, {
-      temperature: 0.7,
-      maxOutputTokens: 4096,
-      maxContextTokens: 128000,
-      thinkingDepth: 'off',
-    });
+    if (showModelControls) {
+      store.setAgentConfig(agentId, {
+        temperature: 0.7,
+        maxOutputTokens: 4096,
+        maxContextTokens: 128000,
+        thinkingDepth: 'off',
+      });
+    }
     onResetPrompt();
     message.success(`已恢复 ${title} 默认配置`);
   };
@@ -163,23 +170,25 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
         onFinish={handleSave}
         requiredMark={false}
       >
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-          <Form.Item label="温度 (Temperature)" name="temperature" style={{ marginBottom: 0 }}>
-            <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="最大输出 Token" name="maxOutputTokens" style={{ marginBottom: 0 }}>
-            <InputNumber min={1} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="最大上下文 Token" name="maxContextTokens" style={{ marginBottom: 0 }}>
-            <InputNumber min={1} step={1024} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="思考深度 (Depth)" name="thinkingDepth" style={{ marginBottom: 0 }}>
-            <Select
-              style={{ width: '100%' }}
-              options={effortLevelOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
-            />
-          </Form.Item>
-        </div>
+        {showModelControls && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+            <Form.Item label="温度 (Temperature)" name="temperature" style={{ marginBottom: 0 }}>
+              <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item label="最大输出 Token" name="maxOutputTokens" style={{ marginBottom: 0 }}>
+              <InputNumber min={1} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item label="最大上下文 Token" name="maxContextTokens" style={{ marginBottom: 0 }}>
+              <InputNumber min={1} step={1024} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item label="思考深度 (Depth)" name="thinkingDepth" style={{ marginBottom: 0 }}>
+              <Select
+                style={{ width: '100%' }}
+                options={effortLevelOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
+              />
+            </Form.Item>
+          </div>
+        )}
 
         <Form.Item
           label="系统提示词 (System Prompt)"
@@ -766,13 +775,23 @@ const Settings: React.FC = () => {
             </div>
 
             <AgentSettingCard
-              title="冒险 Agent"
+              title="冒险 Agent（非动态加载）"
               agentId="storyAgent"
               defaultPrompt={defaultStoryAgentPrompt}
               currentPrompt={store.storyAgentPrompt}
               onSavePrompt={store.setStoryAgentPrompt}
               onResetPrompt={store.resetStoryAgentPrompt}
               helpText="此提示词将作为跑团/文字冒险故事中故事 Agent（主持GM）的核心系统提示词。结尾将自动且优雅地嵌入用户选择的世界书、多个角色卡和个人信息。第一条用户消息为填入的初始剧情。"
+            />
+
+            <AgentSettingCard
+              title="冒险 Agent（角色卡动态加载）"
+              agentId="storyDynamicAgent"
+              defaultPrompt={defaultStoryDynamicAgentPrompt}
+              currentPrompt={store.storyDynamicAgentPrompt}
+              onSavePrompt={store.setStoryDynamicAgentPrompt}
+              onResetPrompt={store.resetStoryDynamicAgentPrompt}
+              helpText="开启角色卡动态加载时使用此配置。此提示词会强调角色本人发言必须通过 role_play 生成。"
             />
           </section>
 

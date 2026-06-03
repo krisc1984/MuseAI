@@ -718,7 +718,11 @@ async fn execute_agent_tool(
             }
             AgentToolExecution {
                 success: true,
-                model_output: normalize_agent_tool_output(true, &output),
+                model_output: if tool_name == "role_play" {
+                    output
+                } else {
+                    normalize_agent_tool_output(true, &output)
+                },
             }
         }
         Err(output) => AgentToolExecution {
@@ -878,7 +882,230 @@ async fn execute_agent_tool_inner(
                 (output, Some(ui_todos))
             })
         }
+        "role_play" => {
+            let output = run_role_play_tool(request, input).await?;
+            Ok((output, None))
+        }
         _ => Err(format!("Error: unknown tool \"{}\"", tool_name)),
+    }
+}
+async fn run_role_play_tool(request: &ChatStreamRequest, input: &Value) -> Result<String, String> {
+    let character_name = required_string(input, "characterName")?;
+    let context = request
+        .role_play_context
+        .as_ref()
+        .ok_or_else(|| String::from("角色扮演上下文缺失，请重新开启动态角色卡加载后再试。"))?;
+    let character = resolve_role_play_character(context, &character_name)?.clone();
+    let system_prompt = build_role_play_system_prompt(context, &character);
+    let mut messages = build_role_play_history_messages(&request.messages);
+    messages.push(ChatMessage {
+        id: None,
+        role: "user".to_string(),
+        content: format!(
+            "请现在严格以【{}】的身份，结合上面的冒险进展，给出这个角色此刻的对话回复。只输出角色回复正文，不要输出 JSON。",
+            character.name
+        ),
+        tool_call_id: None,
+        tool_calls: None,
+        thinking_blocks: None,
+    });
+
+    let output = call_role_play_llm(request, &system_prompt, &messages).await?;
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        Ok(String::from("（该角色暂时没有回应。）"))
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+pub fn resolve_role_play_character<'a>(
+    context: &'a RolePlayContext,
+    character_name: &str,
+) -> Result<&'a RolePlayCharacterCard, String> {
+    let target = character_name.trim();
+    let matches: Vec<_> = context
+        .character_cards
+        .iter()
+        .filter(|card| card.name.trim() == target)
+        .collect();
+    if matches.len() == 1 {
+        return Ok(matches[0]);
+    }
+
+    let available = context
+        .character_cards
+        .iter()
+        .map(|card| card.name.as_str())
+        .collect::<Vec<_>>()
+        .join("、");
+    Err(format!(
+        "角色“{}”不可用或不唯一。当前可用角色：{}",
+        target,
+        if available.is_empty() { "无" } else { &available }
+    ))
+}
+pub fn build_role_play_system_prompt(
+    context: &RolePlayContext,
+    character: &RolePlayCharacterCard,
+) -> String {
+    let mut prompt = context.chat_system_prompt.trim().to_string();
+    if let Some(world_book) = context
+        .world_book_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        prompt.push_str("\n\n## 当前世界书\n");
+        prompt.push_str(world_book);
+    }
+    if let Some(user_info) = format_role_play_user_info(context.user_info.as_ref()) {
+        prompt.push_str("\n\n## 我（用户）的角色人设设定\n");
+        prompt.push_str(&user_info);
+    }
+    prompt.push_str("\n\n## 当前扮演角色卡\n");
+    prompt.push_str(&format!("【角色：{}】\n{}", character.name, character.content.trim()));
+    prompt
+}
+pub fn build_role_play_history_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let content = strip_story_internal_markers(&message.content);
+            if content.trim().is_empty() {
+                return None;
+            }
+            match message.role.as_str() {
+                "user" => Some(clean_role_play_message("user", content)),
+                "assistant" => Some(clean_role_play_message("assistant", content)),
+                "tool" => Some(clean_role_play_message(
+                    "assistant",
+                    format!("【工具结果】\n{}", content),
+                )),
+                _ => None,
+            }
+        })
+        .collect()
+}
+fn clean_role_play_message(role: &str, content: String) -> ChatMessage {
+    ChatMessage {
+        id: None,
+        role: role.to_string(),
+        content,
+        tool_call_id: None,
+        tool_calls: None,
+        thinking_blocks: None,
+    }
+}
+fn strip_story_internal_markers(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !(trimmed.starts_with("[[THINKING:") || trimmed.starts_with("[[TOOL:"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+fn format_role_play_user_info(user_info: Option<&Value>) -> Option<String> {
+    let value = user_info?;
+    match value {
+        Value::Object(map) => {
+            let lines = map
+                .iter()
+                .filter_map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(|text| format!("- **{}**：{}", key, text))
+                })
+                .collect::<Vec<_>>();
+            if lines.is_empty() {
+                None
+            } else {
+                Some(lines.join("\n"))
+            }
+        }
+        Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        _ => None,
+    }
+}
+async fn call_role_play_llm(
+    request: &ChatStreamRequest,
+    system_prompt: &str,
+    messages: &[ChatMessage],
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    match request.model_interface.as_str() {
+        "Anthropic-compatible" => {
+            let endpoint = build_anthropic_endpoint(&request.base_url);
+            let body = json!({
+                "model": request.model,
+                "messages": anthropic_history_messages(messages),
+                "system": system_prompt,
+                "stream": false,
+                "temperature": request.temperature.unwrap_or(0.7),
+                "max_tokens": request.max_output_tokens.unwrap_or(4096),
+            });
+            let response = client
+                .post(&endpoint)
+                .header("x-api-key", &request.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Err(format!("角色扮演调用失败：{} {}", status, body_text));
+            }
+            let json: Value = response.json().await.map_err(|e| e.to_string())?;
+            Ok(json
+                .get("content")
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|item| item.get("type") == Some(&json!("text")))
+                })
+                .and_then(|item| item.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string())
+        }
+        _ => {
+            let endpoint = build_openai_endpoint(&request.base_url);
+            let body = json!({
+                "model": request.model,
+                "messages": openai_history_messages(system_prompt, messages),
+                "stream": false,
+                "temperature": request.temperature.unwrap_or(0.7),
+                "max_tokens": request.max_output_tokens.unwrap_or(4096),
+            });
+            let response = client
+                .post(&endpoint)
+                .bearer_auth(&request.api_key)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Err(format!("角色扮演调用失败：{} {}", status, body_text));
+            }
+            let json: Value = response.json().await.map_err(|e| e.to_string())?;
+            Ok(json
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|choice| choice.get("message"))
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string())
+        }
     }
 }
 fn run_subagent_agent_loop<'a>(
@@ -1124,4 +1351,104 @@ pub fn build_reference_context(request: &ChatStreamRequest) -> String {
         }
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn role_context() -> RolePlayContext {
+        RolePlayContext {
+            chat_system_prompt: "聊天Agent提示词".to_string(),
+            world_book_content: Some("魔法大陆世界书".to_string()),
+            user_info: Some(json!({ "姓名": "流浪法师" })),
+            character_cards: vec![
+                RolePlayCharacterCard {
+                    id: "c1".to_string(),
+                    name: "林逸".to_string(),
+                    content: "林逸角色卡正文".to_string(),
+                },
+                RolePlayCharacterCard {
+                    id: "c2".to_string(),
+                    name: "陆雪莹".to_string(),
+                    content: "陆雪莹角色卡正文".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn role_play_resolves_exact_selected_character() {
+        let context = role_context();
+        let card = resolve_role_play_character(&context, "陆雪莹").unwrap();
+        assert_eq!(card.id, "c2");
+    }
+
+    #[test]
+    fn role_play_rejects_unknown_character_with_available_names() {
+        let context = role_context();
+        let err = resolve_role_play_character(&context, "陌生人").unwrap_err();
+        assert!(err.contains("陌生人"));
+        assert!(err.contains("林逸"));
+        assert!(err.contains("陆雪莹"));
+    }
+
+    #[test]
+    fn role_play_prompt_loads_only_requested_character_card() {
+        let context = role_context();
+        let card = resolve_role_play_character(&context, "陆雪莹").unwrap();
+        let prompt = build_role_play_system_prompt(&context, card);
+        assert!(prompt.starts_with("聊天Agent提示词"));
+        assert!(prompt.contains("魔法大陆世界书"));
+        assert!(prompt.contains("流浪法师"));
+        assert!(prompt.contains("陆雪莹角色卡正文"));
+        assert!(!prompt.contains("林逸角色卡正文"));
+    }
+
+    #[test]
+    fn role_play_history_keeps_clean_user_assistant_and_tool_result() {
+        let history = build_role_play_history_messages(&[
+            ChatMessage {
+                id: Some("u1".to_string()),
+                role: "user".to_string(),
+                content: "我进入森林。".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                thinking_blocks: None,
+            },
+            ChatMessage {
+                id: Some("a1".to_string()),
+                role: "assistant".to_string(),
+                content: "树影晃动。\n[[THINKING:t1]]\n[[TOOL:tool-1]]\n她停住脚步。".to_string(),
+                tool_call_id: None,
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "tool-1".to_string(),
+                    name: "role_play".to_string(),
+                    arguments: "{\"characterName\":\"陆雪莹\"}".to_string(),
+                }]),
+                thinking_blocks: Some(vec![json!({"id":"t1","content":"不要注入"})]),
+            },
+            ChatMessage {
+                id: Some("t1".to_string()),
+                role: "tool".to_string(),
+                content: "别乱走。".to_string(),
+                tool_call_id: Some("tool-1".to_string()),
+                tool_calls: None,
+                thinking_blocks: None,
+            },
+        ]);
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[0].content, "我进入森林。");
+        assert_eq!(history[1].role, "assistant");
+        assert!(history[1].content.contains("树影晃动"));
+        assert!(history[1].content.contains("她停住脚步"));
+        assert!(!history[1].content.contains("[[THINKING"));
+        assert!(history[1].tool_calls.is_none());
+        assert!(history[1].thinking_blocks.is_none());
+        assert_eq!(history[2].role, "assistant");
+        assert!(history[2].content.contains("【工具结果】"));
+        assert!(history[2].content.contains("别乱走。"));
+    }
 }

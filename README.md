@@ -103,6 +103,12 @@ MuseAI 是一款运行在你本地电脑上的 AI 写作桌面应用，无需上
 
 前往 [Releases 页面](#) 下载最新版本的安装包（`.dmg`/`.exe`），双击安装后即可启动。
 
+macOS 用户安装后如果提示"已损坏，无法打开"，请打开终端运行以下命令后再启动：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/MuseAI.app
+```
+
 ### 2. 配置 AI 模型
 
 首次启动后，进入 **设置** 页面，配置你的 AI 模型：

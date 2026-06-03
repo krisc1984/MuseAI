@@ -24,6 +24,7 @@ interface StoryState {
   isSessionArchived: boolean;
   initialPlot: string;
   contextCompaction: SessionContextCompaction | null;
+  dynamicRoleLoadingEnabled: boolean;
 
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setInput: (input: string) => void;
@@ -39,6 +40,7 @@ interface StoryState {
   setIsSessionArchived: (val: boolean) => void;
   setInitialPlot: (plot: string) => void;
   setContextCompaction: (contextCompaction: SessionContextCompaction | null) => void;
+  setDynamicRoleLoadingEnabled: (enabled: boolean) => void;
   createNewSession: () => void;
 }
 
@@ -59,6 +61,7 @@ export const useStoryStore = create<StoryState>()(
       isSessionArchived: false,
       initialPlot: '',
       contextCompaction: null,
+      dynamicRoleLoadingEnabled: false,
 
       setMessages: (updater) => set((state) => ({
         messages: typeof updater === 'function' ? updater(state.messages) : updater,
@@ -78,6 +81,7 @@ export const useStoryStore = create<StoryState>()(
       setIsSessionArchived: (isSessionArchived) => set({ isSessionArchived }),
       setInitialPlot: (initialPlot) => set({ initialPlot }),
       setContextCompaction: (contextCompaction) => set({ contextCompaction }),
+      setDynamicRoleLoadingEnabled: (dynamicRoleLoadingEnabled) => set({ dynamicRoleLoadingEnabled }),
 
       createNewSession: () => {
         set(() => ({
@@ -92,6 +96,7 @@ export const useStoryStore = create<StoryState>()(
           isSessionArchived: false,
           initialPlot: '',
           contextCompaction: null,
+          dynamicRoleLoadingEnabled: false,
         }));
       },
     }),
@@ -101,6 +106,7 @@ export const useStoryStore = create<StoryState>()(
         selectedWorldBookId: state.selectedWorldBookId,
         selectedCharacterCardIds: state.selectedCharacterCardIds,
         initialPlot: state.initialPlot,
+        dynamicRoleLoadingEnabled: state.dynamicRoleLoadingEnabled,
       }),
     }
   )

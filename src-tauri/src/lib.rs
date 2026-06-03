@@ -113,6 +113,7 @@ fn build_full_system_prompt(
         selected_reference_files,
         allowed_tools: None,
         allowed_write_paths: None,
+        role_play_context: None,
     };
 
     let mut full = agent::assemble_system_prompt(Some(&app), &request)?;
@@ -130,11 +131,38 @@ fn create_untitled_item(target_dir: String, is_dir: bool) -> Result<String, Stri
     fs_commands::create_untitled_item_cmd(target_dir, is_dir)
 }
 
+#[cfg(all(debug_assertions, target_os = "macos"))]
+fn set_development_dock_icon() {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let data = NSData::with_bytes(include_bytes!("../icons/icon-dev.icns"));
+    let icon = NSImage::initWithData(NSImage::alloc(), &data).expect("creating development icon");
+    let marker = unsafe { MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(marker);
+    unsafe { app.setApplicationIconImage(Some(&icon)) };
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            #[cfg(not(all(debug_assertions, target_os = "macos")))]
+            {
+                let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+                if let Some(window) = app.get_webview_window("main") {
+                    window.set_icon(icon)?;
+                }
+            }
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            {
+                let _ = app;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             list_dir,
@@ -191,8 +219,17 @@ pub fn run() {
             test_llm_connection,
         ])
         .manage(ActiveStreams(Mutex::new(HashMap::new())))
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, event| {
+        #[cfg(all(debug_assertions, target_os = "macos"))]
+        if matches!(event, tauri::RunEvent::Ready) {
+            set_development_dock_icon();
+        }
+        #[cfg(not(all(debug_assertions, target_os = "macos")))]
+        let _ = event;
+    });
 }
 
 #[cfg(test)]

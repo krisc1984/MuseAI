@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox } from 'antd';
+import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox, Switch } from 'antd';
 import {
   BulbOutlined,
   HistoryOutlined,
@@ -25,7 +25,14 @@ import remarkGfm from 'remark-gfm';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
-import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction } from '../stores/useAgentStore';
+import { usePartnerChatStore } from '../stores/usePartnerChatStore';
+import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
+import {
+  buildStoryModelMessages,
+  compileStorySystemPrompt,
+  getRolePlayCharacterName,
+  getStoryAllowedTools,
+} from './storyAgent';
 
 interface ChatStreamEvent {
   runId: string;
@@ -38,62 +45,6 @@ interface ChatStreamEvent {
   toolArguments?: string;
   contextCompaction?: SessionContextCompaction;
 }
-
-const USER_INFO_LABELS: Record<string, string> = {
-  name: '姓名',
-  age: '年龄',
-  gender: '性别',
-  race: '种族',
-  birthplace: '出生地',
-  occupation: '职业',
-  socialClass: '社会阶层',
-  heightBuild: '身高体型',
-  iconicFeatures: '标志性特征',
-  clothingStyle: '衣着风格',
-  overallVibe: '整体气质',
-  externalPersonality: '外在性格',
-  internalPersonality: '内在性格',
-  coreDesire: '核心欲望',
-  fearWeakness: '恐惧与弱点',
-  moralValues: '道德观念',
-  quirk: '怪癖',
-  skills: '技能专长',
-  backgroundStory: '背景故事',
-  relationships: '人际关系',
-  speakingStyle: '说话方式',
-  typicalReactions: '典型反应'
-};
-
-const compileStorySystemPrompt = (
-  basePrompt: string,
-  worldBookContent: string | null,
-  characterCardContents: string[],
-  userInfo: Record<string, any>
-): string => {
-  let prompt = basePrompt.trim();
-
-  if (worldBookContent && worldBookContent.trim()) {
-    prompt += `\n\n## 故事主世界背景设定\n请严格遵守以下世界背景设定展开叙事，不要脱离该设定范围：\n${worldBookContent.trim()}`;
-  }
-
-  if (characterCardContents.length > 0) {
-    prompt += `\n\n## 故事参与活跃角色设定（背景NPC设定）\n以下是本次冒险中参与互动的活跃NPC角色设定，你扮演这些角色时，语气、言行举止与动作必须与人设高度一致：`;
-    characterCardContents.forEach((content, index) => {
-      prompt += `\n\n【NPC角色 ${index + 1}】\n${content.trim()}`;
-    });
-  }
-
-  const userFields = Object.entries(userInfo)
-    .filter(([k, v]) => USER_INFO_LABELS[k] && typeof v === 'string' && v.trim() !== '')
-    .map(([k, v]) => `- **${USER_INFO_LABELS[k]}**：${v}`)
-    .join('\n');
-
-  if (userFields) {
-    prompt += `\n\n## 我（用户）的角色人设设定\n这是用户所扮演的冒险主角人设设定，请记住此人设并以此决定NPC们对他的态度与互动反应：\n${userFields}`;
-  }
-
-  return prompt;
-};
 
 const estimateContextUsage = (systemPrompt: string, messages: Message[], draft: string) => {
   const stats = {
@@ -123,10 +74,12 @@ const Story: React.FC = () => {
     isSessionArchived, setIsSessionArchived,
     initialPlot, setInitialPlot,
     contextCompaction, setContextCompaction,
+    dynamicRoleLoadingEnabled, setDynamicRoleLoadingEnabled,
     createNewSession
   } = useStoryStore();
 
   const { worldBooks, characterCards, updateItemFields, selectItem } = usePartnerStore();
+  const { userInfo: partnerChatUserInfo } = usePartnerChatStore();
   const settings = useSettingsStore();
 
   const chatHistoryRef = useRef<HTMLDivElement>(null);
@@ -238,6 +191,36 @@ const Story: React.FC = () => {
         return;
       }
 
+      if (payload.eventType === 'tool_start') {
+        currentThinkingIdRef.current = null;
+        const toolId = payload.toolCallId || `tool-${Date.now()}`;
+        setMessages((prev) => {
+          const next = updateMessageTool(prev, activeRun.messageId!, {
+            id: toolId,
+            name: payload.toolName || '未知工具',
+            result: payload.toolName === 'role_play' ? '' : payload.message || '正在执行工具',
+            status: payload.toolStatus || 'running',
+            arguments: payload.toolArguments || '{}',
+          }, 'start');
+          return next.map((msg) =>
+            msg.id === activeRun.messageId
+              ? { ...msg, content: msg.content + `\n\n[[TOOL:${toolId}]]\n\n` }
+              : msg
+          );
+        });
+        return;
+      }
+
+      if (payload.eventType === 'tool_output' || payload.eventType === 'tool_end') {
+        setMessages((prev) => updateMessageTool(prev, activeRun.messageId!, {
+          id: payload.toolCallId,
+          name: payload.toolName || '未知工具',
+          result: payload.message || payload.delta || '',
+          status: payload.toolStatus || (payload.eventType === 'tool_end' ? 'success' : 'running'),
+        }, payload.eventType === 'tool_end' ? 'end' : 'output'));
+        return;
+      }
+
       if (payload.eventType === 'context_compacted' && payload.contextCompaction) {
         contextCompactionRef.current = payload.contextCompaction;
         setContextCompaction(payload.contextCompaction);
@@ -293,15 +276,36 @@ const Story: React.FC = () => {
 
   const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId) || null;
   const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
+  const storyAllowedTools = getStoryAllowedTools(dynamicRoleLoadingEnabled);
+  const rolePlayContext = dynamicRoleLoadingEnabled ? {
+    chatSystemPrompt: settings.partnerChatPrompt || '',
+    worldBookContent: selectedWorldBook?.content || '',
+    userInfo: partnerChatUserInfo,
+    characterCards: selectedCards.map((card) => ({
+      id: card.id,
+      name: card.name,
+      content: card.content,
+    })),
+  } : null;
 
   // Compile final Prompt
-  const baseSystemPrompt = settings.storyAgentPrompt || '';
-  const effectiveSystemPrompt = compileStorySystemPrompt(
-    baseSystemPrompt,
-    selectedWorldBook ? selectedWorldBook.content : null,
-    selectedCards.map(c => c.content),
-    useSettingsStore.getState().systemPrompt ? {} : {} // Fallback empty or we'll inject user setting info
-  );
+  const baseSystemPrompt = dynamicRoleLoadingEnabled
+    ? settings.storyDynamicAgentPrompt || ''
+    : settings.storyAgentPrompt || '';
+  const effectiveSystemPrompt = compileStorySystemPrompt({
+    basePrompt: baseSystemPrompt,
+    worldBookContent: selectedWorldBook ? selectedWorldBook.content : null,
+    characterCards: selectedCards.map((card) => ({ name: card.name, content: card.content })),
+    userInfo: partnerChatUserInfo,
+    dynamicRoleLoadingEnabled,
+  });
+  const storyAgentConfigId = dynamicRoleLoadingEnabled ? 'storyDynamicAgent' : 'storyAgent';
+  const storyAgentConfig = settings.agentConfigs?.[storyAgentConfigId] || {
+    temperature: 0.7,
+    maxOutputTokens: 4096,
+    maxContextTokens: 128000,
+    thinkingDepth: 'off',
+  };
 
   const startAdventure = async () => {
     if (!selectedWorldBookId || !initialPlot.trim()) {
@@ -343,7 +347,7 @@ const Story: React.FC = () => {
         baseUrl: settings.llmBaseUrl,
         apiKey: settings.llmApiKey,
         model: settings.llmModel,
-        temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
+        temperature: storyAgentConfig.temperature ?? 0.7,
         maxOutputTokens: 64,
         text: formattedPlot,
       },
@@ -364,16 +368,17 @@ const Story: React.FC = () => {
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
-          temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
-          maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
-          maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
-          thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
+          temperature: storyAgentConfig.temperature ?? 0.7,
+          maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 4096,
+          maxContextTokens: storyAgentConfig.maxContextTokens ?? 128000,
+          thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
           messages: [{ id: userMessage.id, role: 'user', content: formattedPlot }],
           contextCompaction: null,
           selectedReferenceFiles: [],
-          allowedTools: []
+          allowedTools: storyAllowedTools,
+          rolePlayContext,
         }
       });
 
@@ -427,11 +432,7 @@ const Story: React.FC = () => {
     scrollToBottomOnce();
 
     try {
-      const modelMessages = nextMessages.slice(0, -1).map(msg => ({
-        id: msg.id,
-        role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
-        content: msg.content
-      }));
+      const modelMessages = buildStoryModelMessages(nextMessages.slice(0, -1));
 
       const runId = await invoke<string>('start_chat_completion_stream', {
         request: {
@@ -439,16 +440,17 @@ const Story: React.FC = () => {
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
-          temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
-          maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
-          maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
-          thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
+          temperature: storyAgentConfig.temperature ?? 0.7,
+          maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 4096,
+          maxContextTokens: storyAgentConfig.maxContextTokens ?? 128000,
+          thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
           messages: modelMessages,
           contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: [],
-          allowedTools: []
+          allowedTools: storyAllowedTools,
+          rolePlayContext,
         }
       });
 
@@ -524,11 +526,7 @@ const Story: React.FC = () => {
       scrollToBottomOnce();
 
       try {
-        const modelMessages = baseMessages.map(m => ({
-          id: m.id,
-          role: m.role === 'user' ? 'user' as const : 'assistant' as const,
-          content: m.content
-        }));
+        const modelMessages = buildStoryModelMessages(baseMessages);
 
         const runId = await invoke<string>('start_chat_completion_stream', {
           request: {
@@ -536,16 +534,17 @@ const Story: React.FC = () => {
             baseUrl: settings.llmBaseUrl,
             apiKey: settings.llmApiKey,
             model: settings.llmModel,
-            temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
-            maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
-            maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
-            thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
+            temperature: storyAgentConfig.temperature ?? 0.7,
+            maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 4096,
+            maxContextTokens: storyAgentConfig.maxContextTokens ?? 128000,
+            thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
             systemPrompt: effectiveSystemPrompt,
             workspacePath: null,
             messages: modelMessages,
             contextCompaction: contextCompactionRef.current,
             selectedReferenceFiles: [],
-            allowedTools: []
+            allowedTools: storyAllowedTools,
+            rolePlayContext,
           }
         });
 
@@ -587,11 +586,7 @@ const Story: React.FC = () => {
     scrollToBottomOnce();
 
     try {
-      const modelMessages = baseMessages.map(msg => ({
-        id: msg.id,
-        role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
-        content: msg.content
-      }));
+      const modelMessages = buildStoryModelMessages(baseMessages);
 
       const runId = await invoke<string>('start_chat_completion_stream', {
         request: {
@@ -599,16 +594,17 @@ const Story: React.FC = () => {
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
-          temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
-          maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
-          maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
-          thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
+          temperature: storyAgentConfig.temperature ?? 0.7,
+          maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 4096,
+          maxContextTokens: storyAgentConfig.maxContextTokens ?? 128000,
+          thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
           messages: modelMessages,
           contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: [],
-          allowedTools: []
+          allowedTools: storyAllowedTools,
+          rolePlayContext,
         }
       });
 
@@ -655,6 +651,8 @@ const Story: React.FC = () => {
           todos: [],
           contextCompaction: contextCompactionRef.current,
           isArchived: isSessionArchivedRef.current,
+          selectedWorldBookId,
+          dynamicRoleLoadingEnabled,
           characterCardIds: selectedCharacterCardIdsRef.current
         }
       });
@@ -672,6 +670,9 @@ const Story: React.FC = () => {
       setSessionId(session.id);
       setSessionTitle(session.title);
       setMessages(session.messages);
+      setSelectedWorldBookId(session.selectedWorldBookId ?? null);
+      setSelectedCharacterCardIds(session.characterCardIds ?? []);
+      setDynamicRoleLoadingEnabled(session.dynamicRoleLoadingEnabled ?? false);
       contextCompactionRef.current = session.contextCompaction ?? null;
       setContextCompaction(session.contextCompaction ?? null);
       setIsStreaming(false);
@@ -828,7 +829,7 @@ const Story: React.FC = () => {
 
   // Context Stats
   const contextStats = estimateContextUsage(effectiveSystemPrompt, messages, input);
-  const maxContext = settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000;
+  const maxContext = storyAgentConfig.maxContextTokens ?? 128000;
   const contextPercent = maxContext > 0
     ? Math.min(100, Math.round((contextStats.total / maxContext) * 100))
     : 0;
@@ -1041,7 +1042,7 @@ const Story: React.FC = () => {
           <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {sessionTitle}
             <span style={{ fontSize: 12, color: '#8c8882', fontWeight: 400 }}>
-              ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色)
+              ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色{dynamicRoleLoadingEnabled ? ' · 动态加载' : ''})
             </span>
           </h3>
         </div>
@@ -1123,7 +1124,7 @@ const Story: React.FC = () => {
               <FoldBlock
                 icon={<InfoCircleOutlined />}
                 variant="thinking"
-                title="冒险设定系统提示词（已融汇世界书与多角色卡）"
+                title={dynamicRoleLoadingEnabled ? '冒险设定系统提示词（角色卡动态加载）' : '冒险设定系统提示词（已融汇世界书与多角色卡）'}
                 preview={effectiveSystemPrompt.slice(0, 80) + (effectiveSystemPrompt.length > 80 ? '...' : '')}
                 detail={effectiveSystemPrompt}
                 expanded={Boolean(expandedBlocks['story-system-prompt'])}
@@ -1202,9 +1203,27 @@ const Story: React.FC = () => {
                         )}
 
                         {(() => {
-                          const parts = msg.content ? msg.content.split(/(\[\[(?:THINKING):[^\]]+\]\])/) : [''];
+                          const parts = msg.content ? msg.content.split(/(\[\[(?:TOOL|THINKING):[^\]]+\]\])/) : [''];
+                          const renderedToolIds = new Set<string>();
                           
-                          return parts.map((part, i) => {
+                          const renderedParts = parts.map((part, i) => {
+                            const toolMatch = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
+                            if (toolMatch) {
+                              const toolId = toolMatch[1];
+                              const toolIndex = msg.tools?.findIndex(t => t.id === toolId);
+                              if (toolIndex !== undefined && toolIndex >= 0) {
+                                const tool = msg.tools![toolIndex];
+                                renderedToolIds.add(toolId);
+                                return renderStoryTool(
+                                  tool,
+                                  `${msg.id}-tool-${toolIndex}`,
+                                  Boolean(expandedBlocks[`${msg.id}-tool-${toolIndex}`]),
+                                  () => toggleBlock(`${msg.id}-tool-${toolIndex}`),
+                                );
+                              }
+                              return null;
+                            }
+
                             const thinkingMatch = part.match(/^\[\[THINKING:([^\]]+)\]\]$/);
                             if (thinkingMatch) {
                               const thinkingId = thinkingMatch[1];
@@ -1233,6 +1252,18 @@ const Story: React.FC = () => {
                               </div>
                             ) : null;
                           });
+
+                          const unrenderedTools = (msg.tools ?? []).map((tool, toolIndex) => {
+                            if (tool.id && renderedToolIds.has(tool.id)) return null;
+                            return renderStoryTool(
+                              tool,
+                              `${msg.id}-tool-extra-${toolIndex}`,
+                              Boolean(expandedBlocks[`${msg.id}-tool-extra-${toolIndex}`]),
+                              () => toggleBlock(`${msg.id}-tool-extra-${toolIndex}`),
+                            );
+                          });
+
+                          return [...renderedParts, ...unrenderedTools];
                         })()}
                       </>
                     )}
@@ -1396,6 +1427,30 @@ const Story: React.FC = () => {
                   fontSize: '14px',
                   lineHeight: 1.6
                 }}
+              />
+            </div>
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '16px',
+              padding: '12px 14px',
+              border: '1px solid #f0e7de',
+              borderRadius: '8px',
+              background: '#fffaf6'
+            }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e' }}>
+                  角色卡动态加载
+                </div>
+                <div style={{ fontSize: '12px', color: '#8c8882', marginTop: 4 }}>
+                  开启后，冒险中由 Agent 按角色名调用角色卡回复
+                </div>
+              </div>
+              <Switch
+                checked={dynamicRoleLoadingEnabled}
+                onChange={setDynamicRoleLoadingEnabled}
               />
             </div>
 
@@ -1563,6 +1618,93 @@ function FoldBlock({
         <span className="agent-fold-block__preview">{preview || '暂无内容'}</span>
       </button>
       {expanded && <pre className="agent-fold-block__detail">{detail ?? preview}</pre>}
+    </div>
+  );
+}
+
+function updateMessageTool(
+  messages: Message[],
+  messageId: string,
+  tool: AgentToolEntry,
+  mode: 'start' | 'output' | 'end',
+) {
+  return messages.map((msg) => {
+    if (msg.id !== messageId) {
+      return msg;
+    }
+    const tools = [...(msg.tools ?? [])];
+    const index = tool.id
+      ? tools.findIndex((entry) => entry.id === tool.id)
+      : tools.length - 1;
+    if (mode === 'start' || index < 0) {
+      return { ...msg, tools: [...tools, tool] };
+    }
+
+    const current = tools[index];
+    const prevResult = current.result === '正在执行工具' ? '' : current.result;
+    tools[index] = {
+      ...current,
+      name: tool.name || current.name,
+      status: tool.status || current.status,
+      arguments: tool.arguments || current.arguments,
+      result: mode === 'output'
+        ? `${prevResult}${tool.result}`
+        : tool.result || current.result,
+    };
+    return { ...msg, tools };
+  });
+}
+
+function renderStoryTool(
+  tool: AgentToolEntry,
+  blockId: string,
+  expanded: boolean,
+  onToggle: () => void,
+) {
+  if (tool.name === 'role_play') {
+    if (!tool.result.trim()) {
+      return null;
+    }
+    return <RolePlayToolBubble key={`role-play-${tool.id || blockId}`} tool={tool} />;
+  }
+
+  return (
+    <FoldBlock
+      icon={<InfoCircleOutlined />}
+      variant="tool"
+      key={`tool-${tool.id || blockId}`}
+      title={`工具：${tool.name}`}
+      preview={tool.result}
+      expanded={expanded}
+      onToggle={onToggle}
+    />
+  );
+}
+
+function RolePlayToolBubble({ tool }: { tool: AgentToolEntry }) {
+  const characterName = getRolePlayCharacterName(tool.arguments);
+  return (
+    <div style={{
+      width: '100%',
+      border: '1px solid #f1dfd4',
+      borderRadius: '8px',
+      background: '#fffaf6',
+      padding: '12px 14px',
+      margin: '8px 0'
+    }}>
+      <div style={{
+        fontSize: '13px',
+        fontWeight: 700,
+        color: '#d97757',
+        marginBottom: '8px'
+      }}>
+        {characterName}
+      </div>
+      <div className="agent-markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {tool.result || '角色暂未回应。'}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }

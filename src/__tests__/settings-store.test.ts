@@ -8,6 +8,8 @@ import {
   defaultOutlineAssessmentPrompt,
   defaultPartnerChatPrompt,
   defaultStoryAgentPrompt,
+  defaultStoryDynamicAgentPrompt,
+  useSettingsStore,
 } from '../stores/useSettingsStore';
 
 describe('Settings store default exports', () => {
@@ -51,5 +53,28 @@ describe('Settings store default exports', () => {
   it('defaultStoryAgentPrompt should contain DM narrative constraints', () => {
     expect(defaultStoryAgentPrompt).toContain('沉浸式叙事');
     expect(defaultStoryAgentPrompt).toContain('绝不代替用户角色做决定');
+  });
+
+  it('defaultStoryDynamicAgentPrompt should require role_play for character speech', () => {
+    expect(defaultStoryDynamicAgentPrompt).toContain('角色卡动态加载');
+    expect(defaultStoryDynamicAgentPrompt).toContain('role_play');
+    expect(defaultStoryDynamicAgentPrompt).toContain('禁止代写角色台词');
+  });
+
+  it('should keep a separate model config for dynamic story agent', () => {
+    const { agentConfigs } = useSettingsStore.getState();
+
+    expect(agentConfigs.storyAgent).toEqual({
+      temperature: 0.7,
+      maxOutputTokens: 4096,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.storyDynamicAgent).toEqual({
+      temperature: 0.7,
+      maxOutputTokens: 4096,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
   });
 });
