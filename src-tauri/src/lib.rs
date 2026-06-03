@@ -150,7 +150,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            #[cfg(not(all(debug_assertions, target_os = "macos")))]
+            #[cfg(target_os = "windows")]
+            {
+                let icon =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))?;
+                if let Some(window) = app.get_webview_window("main") {
+                    window.set_icon(icon)?;
+                }
+            }
+            #[cfg(all(
+                not(target_os = "windows"),
+                not(all(debug_assertions, target_os = "macos"))
+            ))]
             {
                 let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
                 if let Some(window) = app.get_webview_window("main") {
