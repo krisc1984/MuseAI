@@ -3,10 +3,11 @@ import WorkspaceDirectory from '../components/WorkspaceDirectory';
 import MarkdownEditor from '../components/MarkdownEditor';
 import OutlineCreationAgentChat from '../components/OutlineCreationAgentChat';
 import OutlineAssessmentAgentChat from '../components/OutlineAssessmentAgentChat';
+import ReverseOutlineAnalysisModal from '../components/ReverseOutlineAnalysisModal';
 import { useOutlineStore } from '../stores/useOutlineStore';
 import { defaultOutlineAssessmentPrompt, useSettingsStore } from '../stores/useSettingsStore';
 import { Button, Popover, Progress, Select, Popconfirm, message } from 'antd';
-import { RobotOutlined, CheckCircleOutlined, DeleteOutlined } from '@ant-design/icons';
+import { RobotOutlined, CheckCircleOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { ScoreDetailsModal } from '../components/ScoreDetailsModal';
 
@@ -27,6 +28,7 @@ const Outline: React.FC = () => {
   const [isResizingFileTree, setIsResizingFileTree] = useState(false);
   const [isResizingAgent, setIsResizingAgent] = useState(false);
   const [isScoreModalOpen, setIsScoreModalOpen] = useState(false);
+  const [isReverseOutlineOpen, setIsReverseOutlineOpen] = useState(false);
 
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const {
@@ -180,6 +182,22 @@ const Outline: React.FC = () => {
             dirType="outline"
             selectedFile={selectedOutlineFile}
             onSelectFile={setSelectedOutlineFile}
+            footer={
+              <Button
+                block
+                icon={<FileSearchOutlined />}
+                onClick={() => setIsReverseOutlineOpen(true)}
+                style={{
+                  borderColor: 'rgba(217, 119, 87, 0.28)',
+                  color: '#9f513a',
+                  background: '#fffdfa',
+                  height: 38,
+                  boxShadow: '0 4px 12px rgba(217, 119, 87, 0.08)',
+                }}
+              >
+                AI反向分析大纲
+              </Button>
+            }
           />
           <div
             aria-label="调整文件树宽度"
@@ -437,6 +455,10 @@ const Outline: React.FC = () => {
           </div>
         )}
       </div>
+      <ReverseOutlineAnalysisModal
+        open={isReverseOutlineOpen}
+        onClose={() => setIsReverseOutlineOpen(false)}
+      />
     </div>
   );
 };

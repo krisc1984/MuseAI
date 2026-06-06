@@ -545,10 +545,16 @@ pub fn parse_openai_stream_event(data: &str) -> Option<OpenAiStreamEvent> {
             });
         }
     }
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .map(String::from);
+
     Some(OpenAiStreamEvent {
         content,
         reasoning_content,
         tool_call_chunks,
+        finish_reason,
     })
 }
 pub fn parse_anthropic_stream_event(data: &str) -> Option<AnthropicStreamEvent> {
@@ -572,6 +578,14 @@ pub fn parse_anthropic_stream_event(data: &str) -> Option<AnthropicStreamEvent> 
                 }),
                 _ => None,
             }
+        }
+        "message_delta" => {
+            let delta = value.get("delta")?;
+            let stop_reason = delta
+                .get("stop_reason")
+                .and_then(Value::as_str)
+                .map(String::from);
+            Some(AnthropicStreamEvent::MessageDelta { stop_reason })
         }
         "content_block_delta" => {
             let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;

@@ -74,15 +74,21 @@ pub fn result_to_tool_result(result: Result<String, String>) -> ToolResult {
     }
 }
 
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 pub fn expand_path(base_dir: Option<&str>, path: &str) -> std::path::PathBuf {
     if path == "~" {
-        if let Some(home) = env::var_os("HOME") {
-            return home.into();
+        if let Some(home) = home_dir() {
+            return home;
         }
     }
     if let Some(stripped) = path.strip_prefix("~/") {
-        if let Some(home) = env::var_os("HOME") {
-            return Path::new(&home).join(stripped);
+        if let Some(home) = home_dir() {
+            return home.join(stripped);
         }
     }
     let p = Path::new(path);
@@ -105,8 +111,22 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for comp in path.components() {
         match comp {
-            std::path::Component::Prefix(p) => result.push(p.as_os_str()),
-            std::path::Component::RootDir => result.push("/"),
+            std::path::Component::Prefix(p) => {
+                result.push(p.as_os_str());
+                if cfg!(target_os = "windows") {
+                    match p.kind() {
+                        std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_) => {
+                            result.push("\\");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            std::path::Component::RootDir => {
+                if !cfg!(target_os = "windows") || result.as_os_str().is_empty() {
+                    result.push(std::path::MAIN_SEPARATOR_STR);
+                }
+            }
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
                 result.pop();
@@ -252,10 +272,14 @@ pub fn get_python_info() -> &'static str {
             _ => String::from("未检测到 Python 环境"),
         };
 
-        let path_output = std::process::Command::new("which")
-            .arg("python3")
-            .output()
-            .or_else(|_| std::process::Command::new("which").arg("python").output());
+        let path_output = if cfg!(target_os = "windows") {
+            std::process::Command::new("where").arg("python").output()
+        } else {
+            std::process::Command::new("which")
+                .arg("python3")
+                .output()
+                .or_else(|_| std::process::Command::new("which").arg("python").output())
+        };
 
         let path = match path_output {
             Ok(out) if out.status.success() => {
@@ -374,24 +398,34 @@ mod tests {
 
     #[test]
     fn test_expand_path_home() {
-        let home = std::env::var_os("HOME").expect("HOME env var should be set");
+        let home = home_dir().expect("home dir should be resolvable");
         let result = expand_path(None, "~");
-        assert_eq!(result, PathBuf::from(&home));
+        assert_eq!(result, home);
 
         let result = expand_path(None, "~/Documents");
-        assert_eq!(result, PathBuf::from(&home).join("Documents"));
+        assert_eq!(result, home.join("Documents"));
     }
 
     #[test]
     fn test_expand_path_absolute() {
-        let result = expand_path(None, "/usr/local/bin");
-        assert_eq!(result, PathBuf::from("/usr/local/bin"));
+        if cfg!(target_os = "windows") {
+            let result = expand_path(None, "C:\\Program Files\\app");
+            assert_eq!(result, PathBuf::from("C:\\Program Files\\app"));
+        } else {
+            let result = expand_path(None, "/usr/local/bin");
+            assert_eq!(result, PathBuf::from("/usr/local/bin"));
+        }
     }
 
     #[test]
     fn test_expand_path_relative_with_base() {
-        let result = expand_path(Some("/base"), "subdir/file.txt");
-        assert_eq!(result, PathBuf::from("/base/subdir/file.txt"));
+        if cfg!(target_os = "windows") {
+            let result = expand_path(Some("C:\\base"), "subdir\\file.txt");
+            assert_eq!(result, PathBuf::from("C:\\base\\subdir\\file.txt"));
+        } else {
+            let result = expand_path(Some("/base"), "subdir/file.txt");
+            assert_eq!(result, PathBuf::from("/base/subdir/file.txt"));
+        }
     }
 
     #[test]
@@ -469,10 +503,7 @@ version: "1.0.0"
 
     #[test]
     fn test_sanitize_session_id_valid() {
-        assert_eq!(
-            sanitize_session_id("session-123").unwrap(),
-            "session-123"
-        );
+        assert_eq!(sanitize_session_id("session-123").unwrap(), "session-123");
         assert_eq!(
             sanitize_session_id("  session_456  ").unwrap(),
             "session_456"

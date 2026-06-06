@@ -19,13 +19,19 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import {
   useSettingsStore,
+  defaultAgentConfigs,
   defaultSystemPrompt,
   defaultDeAiDetectorPrompt,
   defaultDeAiRemoverPrompt,
   defaultWorkSummaryPrompt,
   defaultOutlineCreationPrompt,
   defaultOutlineAssessmentPrompt,
+  defaultReverseOutlineShortPrompt,
+  defaultReverseOutlineLongSummaryPrompt,
+  defaultReverseOutlineLongFinalPrompt,
   defaultPartnerChatPrompt,
+  defaultBackgroundWorldBookPrompt,
+  defaultBackgroundCharacterCardPrompt,
   defaultStoryAgentPrompt,
   defaultStoryDynamicAgentPrompt,
 } from '../stores/useSettingsStore';
@@ -87,22 +93,18 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
 }) => {
   const store = useSettingsStore();
   const [form] = Form.useForm();
-  const agentConfig = store.agentConfigs?.[agentId] || {
-    temperature: 0.7,
-    maxOutputTokens: 4096,
-    maxContextTokens: 128000,
-    thinkingDepth: 'off'
-  };
+  const defaultConfig = defaultAgentConfigs[agentId] || {};
+  const agentConfig = store.agentConfigs?.[agentId] || defaultConfig;
 
   React.useEffect(() => {
     form.setFieldsValue({
-      temperature: agentConfig.temperature ?? 0.7,
-      maxOutputTokens: agentConfig.maxOutputTokens ?? 4096,
-      maxContextTokens: agentConfig.maxContextTokens ?? 128000,
-      thinkingDepth: agentConfig.thinkingDepth ?? 'off',
+      temperature: agentConfig.temperature ?? defaultConfig.temperature ?? 0.7,
+      maxOutputTokens: agentConfig.maxOutputTokens ?? defaultConfig.maxOutputTokens ?? 4096,
+      maxContextTokens: agentConfig.maxContextTokens ?? defaultConfig.maxContextTokens ?? 128000,
+      thinkingDepth: agentConfig.thinkingDepth ?? defaultConfig.thinkingDepth ?? 'off',
       prompt: currentPrompt,
     });
-  }, [agentConfig, currentPrompt]);
+  }, [agentConfig, currentPrompt, defaultConfig]);
 
   const handleSave = (values: any) => {
     if (showModelControls) {
@@ -119,18 +121,18 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
 
   const handleReset = () => {
     form.setFieldsValue({
-      temperature: 0.7,
-      maxOutputTokens: 4096,
-      maxContextTokens: 128000,
-      thinkingDepth: 'off',
+      temperature: defaultConfig.temperature ?? 0.7,
+      maxOutputTokens: defaultConfig.maxOutputTokens ?? 4096,
+      maxContextTokens: defaultConfig.maxContextTokens ?? 128000,
+      thinkingDepth: defaultConfig.thinkingDepth ?? 'off',
       prompt: defaultPrompt,
     });
     if (showModelControls) {
       store.setAgentConfig(agentId, {
-        temperature: 0.7,
-        maxOutputTokens: 4096,
-        maxContextTokens: 128000,
-        thinkingDepth: 'off',
+        temperature: defaultConfig.temperature,
+        maxOutputTokens: defaultConfig.maxOutputTokens,
+        maxContextTokens: defaultConfig.maxContextTokens,
+        thinkingDepth: defaultConfig.thinkingDepth,
       });
     }
     onResetPrompt();
@@ -233,6 +235,138 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
               borderRadius: '6px'
             }}
           >
+            恢复默认
+          </Button>
+        </div>
+      </Form>
+    </Card>
+  );
+};
+
+const ReverseOutlineConcurrencyCard: React.FC = () => {
+  const store = useSettingsStore();
+  const [form] = Form.useForm();
+  const concurrency = store.agentConfigs?.reverseOutline?.concurrency ?? 5;
+
+  React.useEffect(() => {
+    form.setFieldsValue({ concurrency });
+  }, [concurrency]);
+
+  const handleSave = (values: { concurrency: number }) => {
+    store.setAgentConfig('reverseOutline', {
+      concurrency: Math.max(1, Math.min(20, values.concurrency || 5)),
+    });
+    message.success('已保存 AI 反向分析大纲并发数');
+  };
+
+  const handleReset = () => {
+    const defaultConcurrency = defaultAgentConfigs.reverseOutline?.concurrency ?? 5;
+    form.setFieldsValue({ concurrency: defaultConcurrency });
+    store.setAgentConfig('reverseOutline', { concurrency: defaultConcurrency });
+    message.success('已恢复默认并发数');
+  };
+
+  return (
+    <Card
+      style={{
+        backgroundColor: '#ffffff',
+        border: '1px solid #eae6df',
+        borderRadius: '12px',
+        boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
+        marginBottom: '24px',
+      }}
+      styles={{ body: { padding: '24px' } }}
+    >
+      <Form form={form} layout="vertical" onFinish={handleSave} requiredMark={false}>
+        <Form.Item
+          label="AI 反向分析大纲并发数"
+          name="concurrency"
+          help={<span style={{ color: '#8c8780', fontSize: '12px' }}>仅用于长篇文章的分布式并行分析，默认 5，建议不要超过 20。</span>}
+          style={{ marginBottom: 20 }}
+        >
+          <InputNumber min={1} max={20} step={1} style={{ width: 180 }} />
+        </Form.Item>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            style={{
+              backgroundColor: '#d97757',
+              borderColor: '#d97757',
+              color: '#ffffff',
+              fontWeight: 500,
+              borderRadius: '6px'
+            }}
+          >
+            保存配置
+          </Button>
+          <Button onClick={handleReset} style={{ borderColor: '#eae6df', color: '#5c5751', borderRadius: '6px' }}>
+            恢复默认
+          </Button>
+        </div>
+      </Form>
+    </Card>
+  );
+};
+
+const BackgroundConcurrencyCard: React.FC = () => {
+  const store = useSettingsStore();
+  const [form] = Form.useForm();
+  const concurrency = store.agentConfigs?.backgroundExtraction?.concurrency ?? 5;
+
+  React.useEffect(() => {
+    form.setFieldsValue({ concurrency });
+  }, [concurrency]);
+
+  const handleSave = (values: { concurrency: number }) => {
+    store.setAgentConfig('backgroundExtraction', {
+      concurrency: Math.max(1, Math.min(20, values.concurrency || 5)),
+    });
+    message.success('已保存 AI 提取背景设定并发数');
+  };
+
+  const handleReset = () => {
+    const defaultConcurrency = defaultAgentConfigs.backgroundExtraction?.concurrency ?? 5;
+    form.setFieldsValue({ concurrency: defaultConcurrency });
+    store.setAgentConfig('backgroundExtraction', { concurrency: defaultConcurrency });
+    message.success('已恢复默认并发数');
+  };
+
+  return (
+    <Card
+      style={{
+        backgroundColor: '#ffffff',
+        border: '1px solid #eae6df',
+        borderRadius: '12px',
+        boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
+        marginBottom: '24px',
+      }}
+      styles={{ body: { padding: '24px' } }}
+    >
+      <Form form={form} layout="vertical" onFinish={handleSave} requiredMark={false}>
+        <Form.Item
+          label="AI 提取背景设定并发数"
+          name="concurrency"
+          help={<span style={{ color: '#8c8780', fontSize: '12px' }}>仅用于并行提取角色卡，默认 5，建议不要超过 20。</span>}
+          style={{ marginBottom: 20 }}
+        >
+          <InputNumber min={1} max={20} step={1} style={{ width: 180 }} />
+        </Form.Item>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            style={{
+              backgroundColor: '#d97757',
+              borderColor: '#d97757',
+              color: '#ffffff',
+              fontWeight: 500,
+              borderRadius: '6px'
+            }}
+          >
+            保存配置
+          </Button>
+          <Button onClick={handleReset} style={{ borderColor: '#eae6df', color: '#5c5751', borderRadius: '6px' }}>
             恢复默认
           </Button>
         </div>
@@ -751,6 +885,38 @@ const Settings: React.FC = () => {
               onResetPrompt={store.resetOutlineAssessmentPrompt}
               helpText="此提示词将作为大纲评估的主力人设，评估引流能力、开局钩子、情绪脑洞并进行 5 维度商业估分。"
             />
+
+            <AgentSettingCard
+              title="AI反向分析大纲：短篇"
+              agentId="reverseOutlineShort"
+              defaultPrompt={defaultReverseOutlineShortPrompt}
+              currentPrompt={store.reverseOutlineShortPrompt}
+              onSavePrompt={store.setReverseOutlineShortPrompt}
+              onResetPrompt={store.resetReverseOutlineShortPrompt}
+              helpText="此配置用于短篇反向分析，直接读取完整文本并生成结构化大纲。"
+            />
+
+            <AgentSettingCard
+              title="AI反向分析大纲：长篇-分段摘要"
+              agentId="reverseOutlineLongSummary"
+              defaultPrompt={defaultReverseOutlineLongSummaryPrompt}
+              currentPrompt={store.reverseOutlineLongSummaryPrompt}
+              onSavePrompt={store.setReverseOutlineLongSummaryPrompt}
+              onResetPrompt={store.resetReverseOutlineLongSummaryPrompt}
+              helpText="此配置用于长篇反向分析的第一阶段，将每 10 段内容压缩成剧情概要。"
+            />
+
+            <AgentSettingCard
+              title="AI反向分析大纲：长篇-汇总大纲"
+              agentId="reverseOutlineLongFinal"
+              defaultPrompt={defaultReverseOutlineLongFinalPrompt}
+              currentPrompt={store.reverseOutlineLongFinalPrompt}
+              onSavePrompt={store.setReverseOutlineLongFinalPrompt}
+              onResetPrompt={store.resetReverseOutlineLongFinalPrompt}
+              helpText="此配置用于长篇反向分析的第二阶段，根据分段概要汇总生成最终大纲。"
+            />
+
+            <ReverseOutlineConcurrencyCard />
           </section>
 
           <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
@@ -792,24 +958,27 @@ const Settings: React.FC = () => {
               <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>背景页设置</Title>
             </div>
 
-            <Card
-              style={{
-                backgroundColor: '#ffffff',
-                border: '1px solid #eae6df',
-                borderRadius: '12px',
-                boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
-                marginBottom: '24px',
-              }}
-              styles={{
-                body: {
-                  padding: '24px',
-                  textAlign: 'center',
-                  color: '#8c8882'
-                }
-              }}
-            >
-              背景页设置暂时留空
-            </Card>
+            <BackgroundConcurrencyCard />
+
+            <AgentSettingCard
+              title="提取世界书"
+              agentId="backgroundWorldBook"
+              defaultPrompt={defaultBackgroundWorldBookPrompt}
+              currentPrompt={store.backgroundWorldBookPrompt}
+              onSavePrompt={store.setBackgroundWorldBookPrompt}
+              onResetPrompt={store.resetBackgroundWorldBookPrompt}
+              helpText="此提示词用于 AI 智能提取背景设定的第一阶段：生成世界书，并在完整模式下提取角色名列表。"
+            />
+
+            <AgentSettingCard
+              title="提取角色卡"
+              agentId="backgroundCharacterCard"
+              defaultPrompt={defaultBackgroundCharacterCardPrompt}
+              currentPrompt={store.backgroundCharacterCardPrompt}
+              onSavePrompt={store.setBackgroundCharacterCardPrompt}
+              onResetPrompt={store.resetBackgroundCharacterCardPrompt}
+              helpText="此提示词用于 AI 智能提取背景设定的第二阶段：按角色名分别生成结构化角色卡。"
+            />
           </section>
 
           <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />

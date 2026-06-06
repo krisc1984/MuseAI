@@ -112,6 +112,102 @@ const MODULE_NAMES: Record<string, string> = {
   char_memory: '角色记忆',
 };
 
+const fieldToText = (value: unknown): string => {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => fieldToText(item))
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value, null, 2);
+  }
+  return '';
+};
+
+const normalizeCustomFields = (fields?: CustomField[]): CustomField[] | undefined => {
+  if (!Array.isArray(fields)) return undefined;
+  return fields.map((field) => ({
+    id: fieldToText(field.id) || `cf-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    moduleId: fieldToText(field.moduleId),
+    label: fieldToText(field.label) || '自定义字段',
+    value: fieldToText(field.value),
+  }));
+};
+
+export const normalizePartnerFields = (fields?: PartnerItemFields): PartnerItemFields => {
+  const source = (fields || {}) as Record<string, unknown>;
+  const normalized: PartnerItemFields = {};
+  const textFields = [
+    'theme',
+    'era',
+    'techLevel',
+    'magicLevel',
+    'geography',
+    'keyScenes',
+    'culturalFeatures',
+    'history',
+    'conflict',
+    'name',
+    'age',
+    'gender',
+    'race',
+    'birthplace',
+    'occupation',
+    'socialClass',
+    'heightBuild',
+    'iconicFeatures',
+    'clothingStyle',
+    'overallVibe',
+    'externalPersonality',
+    'internalPersonality',
+    'coreDesire',
+    'fearWeakness',
+    'moralValues',
+    'quirk',
+    'skills',
+    'backgroundStory',
+    'relationships',
+    'speakingStyle',
+    'typicalReactions',
+    'relationMemory',
+    'userRelationType',
+    'userInteractionModel',
+    'userRelationBottomLine',
+    'keyEvents',
+  ] as const;
+
+  textFields.forEach((key) => {
+    const value = fieldToText(source[key]);
+    if (value) {
+      normalized[key] = value;
+    }
+  });
+
+  const identityTags = source.identityTags;
+  if (Array.isArray(identityTags)) {
+    normalized.identityTags = identityTags.map((tag) => fieldToText(tag)).filter(Boolean);
+  } else {
+    const tags = fieldToText(identityTags)
+      .split(/[\n,，、；;]+/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    if (tags.length > 0) {
+      normalized.identityTags = tags;
+    }
+  }
+
+  const customFields = normalizeCustomFields(source.customFields as CustomField[] | undefined);
+  if (customFields) {
+    normalized.customFields = customFields;
+  }
+
+  return normalized;
+};
+
 const formatFieldLine = (label: string, value?: string) => {
   const trimmed = (value || '').trim();
   return trimmed ? `- **${label}**：${trimmed}` : '';
@@ -147,6 +243,7 @@ const compileCustomFields = (fields?: CustomField[]): string => {
 };
 
 export const compileItemToMarkdown = (name: string, type: 'world_book' | 'character_card', fields: PartnerItemFields): string => {
+  fields = normalizePartnerFields(fields);
   if (type === 'world_book') {
     const core = buildListSection('核心设定', [
       { label: '主题', value: fields.theme },
@@ -432,7 +529,7 @@ export const usePartnerStore = create<PartnerState>()(
           return {
             worldBooks: state.worldBooks.map((item) => {
               if (item.id === id) {
-                const nextFields = { ...(item.fields || {}), ...fields };
+                const nextFields = normalizePartnerFields({ ...(item.fields || {}), ...fields });
                 return {
                   ...item,
                   fields: nextFields,
@@ -446,7 +543,7 @@ export const usePartnerStore = create<PartnerState>()(
           return {
             characterCards: state.characterCards.map((item) => {
               if (item.id === id) {
-                const nextFields = { ...(item.fields || {}), ...fields };
+                const nextFields = normalizePartnerFields({ ...(item.fields || {}), ...fields });
                 return {
                   ...item,
                   fields: nextFields,
@@ -530,7 +627,7 @@ export const usePartnerStore = create<PartnerState>()(
         const time = Date.now();
         const newWorldBooks: PartnerItem[] = (items.worldBooks || []).map((wb, index) => {
           const id = `wb-ai-${time}-${index}`;
-          const fields = wb.fields || {};
+          const fields = normalizePartnerFields(wb.fields);
           return {
             id,
             name: wb.name || '未命名世界书',
@@ -542,7 +639,7 @@ export const usePartnerStore = create<PartnerState>()(
 
         const newCharacterCards: PartnerItem[] = (items.characterCards || []).map((cc, index) => {
           const id = `cc-ai-${time}-${index}`;
-          const fields = cc.fields || {};
+          const fields = normalizePartnerFields(cc.fields);
           return {
             id,
             name: cc.name || '未命名角色卡',

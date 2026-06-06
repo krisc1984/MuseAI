@@ -19,6 +19,7 @@ export interface AgentConfig {
   maxOutputTokens?: number;
   maxContextTokens?: number;
   thinkingDepth?: 'off' | 'low' | 'medium' | 'high';
+  concurrency?: number;
 }
 
 export interface SettingsState {
@@ -37,7 +38,13 @@ export interface SettingsState {
   workSummaryPrompt: string;
   outlineCreationPrompt: string;
   outlineAssessmentPrompt: string;
+  reverseOutlinePrompt: string;
+  reverseOutlineShortPrompt: string;
+  reverseOutlineLongSummaryPrompt: string;
+  reverseOutlineLongFinalPrompt: string;
   partnerChatPrompt: string;
+  backgroundWorldBookPrompt: string;
+  backgroundCharacterCardPrompt: string;
   storyAgentPrompt: string;
   storyDynamicAgentPrompt: string;
 
@@ -59,8 +66,20 @@ export interface SettingsState {
   resetOutlineCreationPrompt: () => void;
   setOutlineAssessmentPrompt: (prompt: string) => void;
   resetOutlineAssessmentPrompt: () => void;
+  setReverseOutlinePrompt: (prompt: string) => void;
+  resetReverseOutlinePrompt: () => void;
+  setReverseOutlineShortPrompt: (prompt: string) => void;
+  resetReverseOutlineShortPrompt: () => void;
+  setReverseOutlineLongSummaryPrompt: (prompt: string) => void;
+  resetReverseOutlineLongSummaryPrompt: () => void;
+  setReverseOutlineLongFinalPrompt: (prompt: string) => void;
+  resetReverseOutlineLongFinalPrompt: () => void;
   setPartnerChatPrompt: (prompt: string) => void;
   resetPartnerChatPrompt: () => void;
+  setBackgroundWorldBookPrompt: (prompt: string) => void;
+  resetBackgroundWorldBookPrompt: () => void;
+  setBackgroundCharacterCardPrompt: (prompt: string) => void;
+  resetBackgroundCharacterCardPrompt: () => void;
   setStoryAgentPrompt: (prompt: string) => void;
   resetStoryAgentPrompt: () => void;
   setStoryDynamicAgentPrompt: (prompt: string) => void;
@@ -393,6 +412,62 @@ export const defaultOutlineCreationPrompt = `你是一名有着20年网文写作
 - 请将产出的大纲直接写入系统指定的目录或文件中。
 `;
 
+export const defaultReverseOutlinePrompt = `你是一个小说结构分析专家，负责从用户提供的完整文本中反向提炼大纲。请只输出 Markdown 大纲，不要输出解释。
+
+## 任务目标
+1. 仔细阅读用户提供的全部文章内容。
+2. 从情节、人物、结构三个维度进行反向拆解。
+3. 输出结构化大纲，包括但不限于：基础信息设定、核心人物设定、分章节/分段设定。
+4. 注意输出的字数限制，内容精简
+
+## 输出格式要求
+- 短篇：包含文章类型、标签、导语、分段大纲（剧情事件、爽点、段末钩子）。
+- 长篇：包含一句话卖点、异常规则、第一反派/阻力、初识钩子、长线悬念、实力与天赋体系、核心人物设定、分章节设定（关键事件、结束时主角实力、出场反派及实力、出场主角团队人员及实力）。
+`;
+
+export const defaultReverseOutlineShortPrompt = `你是一个小说结构分析专家，负责从用户提供的完整文本中反向提炼大纲。请只输出 Markdown 大纲，不要输出解释。
+
+## 任务目标
+1. 仔细阅读用户提供的全部文章内容。
+2. 从情节、人物、结构三个维度进行反向拆解。
+3. 注意输出的字数限制，内容精简，不超过10000字
+
+## 输出格式要求
+- 文章类型（追妻火葬场、大女主、系统穿越等）和标签（虐文、爽文、打脸等）
+- 导语
+- 分段大纲（5-15段），每一段内容如下：
+  - 剧情事件
+  - 爽点
+  - 段末钩子（除最后一段）
+
+`;
+
+export const defaultReverseOutlineLongSummaryPrompt = `你是一个小说结构分析专家，负责从用户提供的完整文本中反向提炼大纲。请只输出 Markdown 大纲，不要输出解释。
+
+## 任务目标
+1. 仔细阅读用户提供的全部文章内容。
+2. 从情节、人物、结构三个维度进行反向拆解。
+3. 注意输出的字数限制，内容精简，不超过300字
+
+## 输出格式要求
+仅输出主要剧情事件。
+`;
+
+export const defaultReverseOutlineLongFinalPrompt = `你是一个小说结构分析专家，负责从用户提供的完整文本中反向提炼大纲。请只输出 Markdown 大纲，不要输出解释。
+
+## 任务目标
+1. 仔细阅读用户提供的全部文章内容。
+2. 从情节、人物、结构三个维度进行反向拆解。
+3. 注意输出的字数限制，内容精简，不超过10000字
+
+## 输出格式要求
+- 基础信息设定（不超过300字）
+- 核心人物设定
+- 分章节设定，每10段一章，每章内容：
+  - 关键事件（不超过100字）
+
+`;
+
 export const defaultOutlineAssessmentPrompt = `你是一名资深的网文主编，专门负责评估小说的商业价值和大纲质量。
 
 请你仔细阅读用户提供的大纲，从以下 5 个维度进行打分，每个维度满分 20 分，总分 100 分。每个子项都必须结合该维度的“评分参考”独立打分。
@@ -449,6 +524,41 @@ export const defaultPartnerChatPrompt = `你将在此扮演一个特定的角色
 4. **口语化与对话感**：始终使用符合角色性格的自然口语回复。避免书面化的冗长叙述，多用短句、对话和契合情境的微表情/微动作白描（可以使用括号标注动作或神态，例如：\`（轻挑眉梢）\`或\`（后退半步，警惕地看着你）\`）。
 5. **绝对禁用词**：不要在回复中提及任何关于“我是AI”、“我是语言模型”、“作为写作助手”、“以下是大纲”等出戏的系统性词汇。你就是一个活在那个世界里的真实存在。`;
 
+export const defaultBackgroundWorldBookPrompt = `你是一个世界观与人物设定专家。你需要根据用户提供的参考文本，提取结构化世界书；如果任务要求，还要提取适合继续生成角色卡的角色姓名列表。
+
+## 输出格式要求
+请务必返回严格的纯 JSON 格式数据，不要包含 Markdown 代码块标记（如 \`\`\`json）、前言、后记或任何解释性文字。
+
+### 世界书结构
+返回的 JSON 必须包含 \`worldBooks\` 数组，每个元素包含：
+- \`name\`：世界设定集名称（字符串）
+- \`fields\`：世界设定字段对象（对象），常见字段如 theme（核心主题）、era（时代背景）、techLevel（科技水平）、magicLevel（魔法水平）、geography（地理格局）、keyScenes（关键场景）、culturalFeatures（文化特色）、history（历史事件）、conflict（核心矛盾）等
+
+### 角色名列表（完整模式下）
+如果任务要求提取角色名，JSON 中还需包含 \`characterNames\` 字段，值为角色姓名字符串数组。角色名只保留姓名或常用称呼，不要附带解释。
+
+### 正确示例
+仅提取世界书时：
+{"worldBooks":[{"name":"以太纪元","fields":{"theme":"魔法与科技碰撞的末世重建","era":"新历312年，以太风暴后的重建时代","techLevel":"蒸汽魔导混合，部分区域回归原始","magicLevel":"以太魔法体系，施法需以太晶石","geography":"中央浮空城艾瑟拉，外围荒芜废土与浮岛群","keyScenes":"以太风暴废墟、黑市交易所、浮空城议会厅","culturalFeatures":"浮空城贵族与废土流浪者的阶级对立","history":"三百年前第一次以太风暴毁灭古文明，浮空城建立","conflict":"以太晶石枯竭引发的内战与废土觉醒势力"}}]}
+
+完整模式（含角色名）时：
+{"worldBooks":[{"name":"以太纪元","fields":{"theme":"魔法与科技碰撞的末世重建","era":"新历312年","techLevel":"蒸汽魔导混合","magicLevel":"以太魔法体系","geography":"中央浮空城与外围废土","keyScenes":"以太风暴废墟、黑市交易所","culturalFeatures":"浮空城贵族与废土流浪者对立","history":"三百年前第一次以太风暴毁灭古文明","conflict":"以太晶石枯竭引发内战"}}],"characterNames":["林逸","陆雪莹","卡尔文"]}`;
+
+export const defaultBackgroundCharacterCardPrompt = `你是一个人物设定专家。你需要根据参考文本为指定角色生成一张结构化角色卡。
+
+## 输出格式要求
+请务必返回严格的纯 JSON 格式数据，不要包含 Markdown 代码块标记（如 \`\`\`json）、前言、后记或任何解释性文字。
+
+### 角色卡结构
+返回的 JSON 必须包含以下顶级字段：
+- \`name\`：角色姓名（字符串）
+- \`fields\`：角色设定字段对象（对象），常见字段如 age（年龄）、gender（性别）、race（种族）、birthplace（出生地）、occupation（职业）、socialClass（社会阶层）、identityTags（身份标签数组）、heightBuild（身高体型）、iconicFeatures（标志性特征）、clothingStyle（衣着风格）、overallVibe（整体气质）、externalPersonality（外在性格表现）、internalPersonality（真实内在性格本质）、coreDesire（核心欲望与最强驱动力）、fearWeakness（恐惧与弱点软肋）、moralValues（是非对错的道德观念底线）、quirk（怪癖习惯动作）、skills（技能与魔法专长描述）、backgroundStory（角色的身世背景与成长过往经历）、relationships（人际关系网络）、speakingStyle（说话方式与语气口头禅描述）、typicalReactions（典型反应）、userRelationType（与用户关系类型）、userInteractionModel（与用户相处模式详细说明）、userRelationBottomLine（与用户关系相处的底线）、keyEvents（与用户经历的关键事件里程碑）等
+
+你也可以使用 \`characterCard\` 作为外层包裹对象，内部再包含 \`name\` 和 \`fields\`。
+
+### 正确示例
+{"name":"陆雪莹","fields":{"age":"22岁","gender":"女","race":"人类","birthplace":"浮空城艾瑟拉下层区","occupation":"以太晶石研究员","socialClass":"下层平民出身的学者","identityTags":["天才研究员","隐世家族后裔","理想主义者"],"heightBuild":"165cm，纤细清瘦","iconicFeatures":"左眼下方有一颗小痣，实验时常戴护目镜","clothingStyle":"改良版研究员白袍配皮制工具腰带","overallVibe":"清冷知性，偶尔流露倔强","externalPersonality":"冷静理性，不善交际，说话直接","internalPersonality":"内心炽热，渴望被理解，害怕孤独","coreDesire":"找到净化以太晶石的方法，消除阶级鸿沟","fearWeakness":"害怕自己的研究被贵族利用，恐惧失去重要之人","moralValues":"知识应该共享，生命高于利益","quirk":"紧张时会无意识转动手中的以太晶石样本","skills":"以太共鸣感知、晶石提纯术、古文字解读","backgroundStory":"出生于下层区药剂师家庭，幼时目睹母亲因缺药去世，立志研究以太医学","relationships":"与导师卡尔文亦师亦父；视林逸为唯一敢平等对话的伙伴","speakingStyle":"语速偏快，术语多，激动时会结巴，口头禅是'数据表明'","typicalReactions":"遇到不公时先沉默记录，再找机会反击；被关心时会不知所措","userRelationType":"并肩作战的伙伴与潜在的情感羁绊","userInteractionModel":"初期保持距离，随着共同经历逐渐敞开心扉，会主动分享研究成果","userRelationBottomLine":"绝不能利用她的研究伤害下层区人民","keyEvents":"十五岁考入浮空城学院、十八岁时首次独立发现晶石共鸣现象、与林逸在废墟中相遇"}}`;
+
 export const defaultStoryAgentPrompt = `你将在此扮演一个专门的故事主持人（DM/GM）和优秀的故事讲述者，与用户一起进行沉浸式的文字冒险/跑团游戏。你并非普通的写作助手，你也是这个世界的造物主和观察者。
 
 ## 核心行为约束
@@ -474,6 +584,25 @@ export const defaultStoryDynamicAgentPrompt = `你将在此扮演文字冒险中
 6. **不替用户决定**：你绝不代替“我（用户）”做选择、说台词或擅自动手。用户的行动由用户输入决定。
 7. **适应输入模式**：用户输入可能是说话、行为或剧情推进。你要理解其语义，顺着它推进故事。
 8. **保持沉浸**：严禁提及“我是AI模型”“正在调用工具”“系统提示词”“这是一场游戏”等出戏表达。`;
+
+export const defaultAgentConfigs: Record<string, AgentConfig> = {
+  writer: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
+  workSummary: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
+  detector: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
+  remover: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' },
+  outlineCreation: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
+  outlineAssessment: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
+  partnerChat: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
+  reverseOutline: { concurrency: 5 },
+  reverseOutlineShort: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' },
+  reverseOutlineLongSummary: { temperature: 0.3, maxOutputTokens: 8192, maxContextTokens: 200000, thinkingDepth: 'off' },
+  reverseOutlineLongFinal: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' },
+  backgroundExtraction: { concurrency: 5 },
+  backgroundWorldBook: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
+  backgroundCharacterCard: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
+  storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
+  storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
+};
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -503,23 +632,19 @@ export const useSettingsStore = create<SettingsState>()(
       workSummaryPrompt: defaultWorkSummaryPrompt,
       outlineCreationPrompt: defaultOutlineCreationPrompt,
       outlineAssessmentPrompt: defaultOutlineAssessmentPrompt,
+      reverseOutlinePrompt: defaultReverseOutlinePrompt,
+      reverseOutlineShortPrompt: defaultReverseOutlineShortPrompt,
+      reverseOutlineLongSummaryPrompt: defaultReverseOutlineLongSummaryPrompt,
+      reverseOutlineLongFinalPrompt: defaultReverseOutlineLongFinalPrompt,
       partnerChatPrompt: defaultPartnerChatPrompt,
+      backgroundWorldBookPrompt: defaultBackgroundWorldBookPrompt,
+      backgroundCharacterCardPrompt: defaultBackgroundCharacterCardPrompt,
       storyAgentPrompt: defaultStoryAgentPrompt,
       storyDynamicAgentPrompt: defaultStoryDynamicAgentPrompt,
 
 
       worksDirectory: null,
-      agentConfigs: {
-        writer: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        workSummary: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        detector: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        remover: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        outlineCreation: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        outlineAssessment: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        partnerChat: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-        storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-      },
+      agentConfigs: defaultAgentConfigs,
       articleType: ['男频', '长篇', '玄幻脑洞'],
 
       setLlmConfig: (config) => set((state) => ({ ...state, ...config })),
@@ -558,9 +683,33 @@ export const useSettingsStore = create<SettingsState>()(
 
       resetOutlineAssessmentPrompt: () => set({ outlineAssessmentPrompt: defaultOutlineAssessmentPrompt }),
 
+      setReverseOutlinePrompt: (prompt) => set({ reverseOutlinePrompt: prompt }),
+
+      resetReverseOutlinePrompt: () => set({ reverseOutlinePrompt: defaultReverseOutlinePrompt }),
+
+      setReverseOutlineShortPrompt: (prompt) => set({ reverseOutlineShortPrompt: prompt }),
+
+      resetReverseOutlineShortPrompt: () => set({ reverseOutlineShortPrompt: defaultReverseOutlineShortPrompt }),
+
+      setReverseOutlineLongSummaryPrompt: (prompt) => set({ reverseOutlineLongSummaryPrompt: prompt }),
+
+      resetReverseOutlineLongSummaryPrompt: () => set({ reverseOutlineLongSummaryPrompt: defaultReverseOutlineLongSummaryPrompt }),
+
+      setReverseOutlineLongFinalPrompt: (prompt) => set({ reverseOutlineLongFinalPrompt: prompt }),
+
+      resetReverseOutlineLongFinalPrompt: () => set({ reverseOutlineLongFinalPrompt: defaultReverseOutlineLongFinalPrompt }),
+
       setPartnerChatPrompt: (prompt) => set({ partnerChatPrompt: prompt }),
 
       resetPartnerChatPrompt: () => set({ partnerChatPrompt: defaultPartnerChatPrompt }),
+
+      setBackgroundWorldBookPrompt: (prompt) => set({ backgroundWorldBookPrompt: prompt }),
+
+      resetBackgroundWorldBookPrompt: () => set({ backgroundWorldBookPrompt: defaultBackgroundWorldBookPrompt }),
+
+      setBackgroundCharacterCardPrompt: (prompt) => set({ backgroundCharacterCardPrompt: prompt }),
+
+      resetBackgroundCharacterCardPrompt: () => set({ backgroundCharacterCardPrompt: defaultBackgroundCharacterCardPrompt }),
 
       setStoryAgentPrompt: (prompt) => set({ storyAgentPrompt: prompt }),
 
@@ -653,7 +802,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'museai-settings-storage',
       storage: createJSONStorage(() => createDiskStorage('settings-store', 'museai-settings-storage')),
-      version: 11,
+      version: 13,
       partialize: (state) => {
         const { worksDirectory: _, ...rest } = state;
         return rest as SettingsState;
@@ -661,13 +810,20 @@ export const useSettingsStore = create<SettingsState>()(
       migrate: (persistedState, version) => {
         const state = persistedState as any;
         const defaultConfigs = {
-          writer: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
-          workSummary: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
-          detector: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
-          remover: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
-          outlineCreation: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
-          outlineAssessment: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          writer: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' as const },
+          workSummary: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' as const },
+          detector: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' as const },
+          remover: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' as const },
+          outlineCreation: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' as const },
+          outlineAssessment: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' as const },
           partnerChat: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          reverseOutline: { concurrency: 5 },
+          reverseOutlineShort: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' as const },
+          reverseOutlineLongSummary: { temperature: 0.3, maxOutputTokens: 8192, maxContextTokens: 200000, thinkingDepth: 'off' as const },
+          reverseOutlineLongFinal: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' as const },
+          backgroundExtraction: { concurrency: 5 },
+          backgroundWorldBook: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          backgroundCharacterCard: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
         };
@@ -711,9 +867,27 @@ export const useSettingsStore = create<SettingsState>()(
             || !state.outlineCreationPrompt.includes('短篇小说大纲的一般结构')
             ? defaultOutlineCreationPrompt
             : state.outlineCreationPrompt,
+          reverseOutlinePrompt: !state.reverseOutlinePrompt
+            ? defaultReverseOutlinePrompt
+            : state.reverseOutlinePrompt,
+          reverseOutlineShortPrompt: !state.reverseOutlineShortPrompt
+            ? (state.reverseOutlinePrompt || defaultReverseOutlineShortPrompt)
+            : state.reverseOutlineShortPrompt,
+          reverseOutlineLongSummaryPrompt: !state.reverseOutlineLongSummaryPrompt
+            ? defaultReverseOutlineLongSummaryPrompt
+            : state.reverseOutlineLongSummaryPrompt,
+          reverseOutlineLongFinalPrompt: !state.reverseOutlineLongFinalPrompt
+            ? defaultReverseOutlineLongFinalPrompt
+            : state.reverseOutlineLongFinalPrompt,
           partnerChatPrompt: !state.partnerChatPrompt || state.partnerChatPrompt.includes('你是一个温柔、善解人意且富有才华的写作伴侣')
             ? defaultPartnerChatPrompt
             : state.partnerChatPrompt,
+          backgroundWorldBookPrompt: !state.backgroundWorldBookPrompt
+            ? defaultBackgroundWorldBookPrompt
+            : state.backgroundWorldBookPrompt,
+          backgroundCharacterCardPrompt: !state.backgroundCharacterCardPrompt
+            ? defaultBackgroundCharacterCardPrompt
+            : state.backgroundCharacterCardPrompt,
           storyAgentPrompt: !state.storyAgentPrompt
             ? defaultStoryAgentPrompt
             : state.storyAgentPrompt,

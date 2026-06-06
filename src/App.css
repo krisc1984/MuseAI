@@ -176,48 +176,128 @@ a:hover {
   line-height: 18px;
 }
 
-.muse-mdx-editor {
-  background: transparent;
-  color: #33312e;
-}
-
-.muse-mdx-editor .mdxeditor-toolbar {
+.markdown-editor-toolbar {
   position: sticky;
   top: 26px;
   z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 20px;
-  border: 1px solid rgba(217, 119, 87, 0.12);
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 119, 87, 0.1);
   border-radius: 8px;
-  background: rgba(250, 249, 245, 0.92);
+  background: rgba(250, 249, 245, 0.94);
 }
 
-.muse-mdx-content {
+.markdown-editor-layout {
+  display: block;
+}
+
+.markdown-source-panel {
+  min-width: 0;
   min-height: calc(100vh - 150px);
   padding-bottom: 48px;
-  color: #4a4642;
-  font-family: Lora, Merriweather, serif;
-  font-size: 1.1rem;
-  line-height: 1.8;
 }
 
-.muse-mdx-content h1,
-.muse-mdx-content h2,
-.muse-mdx-content h3,
-.muse-mdx-content h4,
-.muse-mdx-content h5,
-.muse-mdx-content h6 {
+.muse-codemirror-editor {
+  background: transparent;
+  color: #4a4642;
+  font-family: Lora, Merriweather, serif;
+}
+
+.muse-codemirror-editor .cm-editor {
+  background: transparent;
+}
+
+.muse-codemirror-editor .cm-content {
+  max-width: 68ch;
+  min-height: calc(100vh - 210px);
+  margin: 0 auto;
+  padding: 28px 0 64px;
+  caret-color: #d97757;
+}
+
+.muse-codemirror-editor .cm-line {
+  padding: 0;
+  color: #4a4642;
+  font-size: 1.12rem;
+  line-height: 1.95;
+}
+
+.muse-codemirror-editor .cm-activeLine {
+  background: rgba(217, 119, 87, 0.045);
+}
+
+.markdown-live-hidden-marker {
+  display: none;
+}
+
+.markdown-live-heading {
   color: #33312e;
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-weight: 600;
+  line-height: 1.35;
 }
 
-.muse-mdx-content a {
-  color: #d97757;
+.markdown-live-heading-1 {
+  padding-top: 28px;
+  padding-bottom: 16px;
+  font-size: 1.7rem;
 }
 
-.muse-mdx-content img {
+.markdown-live-heading-2 {
+  padding-top: 22px;
+  padding-bottom: 12px;
+  font-size: 1.42rem;
+}
+
+.markdown-live-heading-3 {
+  padding-top: 18px;
+  padding-bottom: 8px;
+  font-size: 1.24rem;
+}
+
+.markdown-live-bold {
+  font-weight: 700;
+  color: #33312e;
+}
+
+.markdown-live-italic {
+  font-style: italic;
+}
+
+.markdown-live-image {
+  display: block;
+  margin: 22px 0 26px;
+}
+
+.markdown-live-image img {
+  display: block;
   max-width: 100%;
+  max-height: 520px;
   border-radius: 8px;
+  object-fit: contain;
+}
+
+.markdown-live-image figcaption {
+  margin-top: 8px;
+  color: #8d837b;
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.markdown-editor-test-fallback {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.markdown-editor-test-images {
+  display: none;
 }
 
 .de-ai-editor-toolbar {

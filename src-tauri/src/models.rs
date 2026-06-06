@@ -212,6 +212,55 @@ pub struct GenerateBackgroundItemsRequest {
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GenerateBackgroundStageOneRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub text: String,
+    pub include_character_names: bool,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub max_context_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
+    pub system_prompt: Option<String>,
+    pub task_id: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBackgroundCharacterCardRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub text: String,
+    pub character_name: String,
+    pub world_book_context: Option<String>,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub max_context_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
+    pub system_prompt: Option<String>,
+    pub task_id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedBackgroundItem {
+    pub name: String,
+    pub fields: Value,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundStageOneResponse {
+    pub world_books: Vec<GeneratedBackgroundItem>,
+    pub character_names: Vec<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OptimizeCharacterMemoriesRequest {
     pub model_interface: String,
     pub base_url: String,
@@ -220,7 +269,142 @@ pub struct OptimizeCharacterMemoriesRequest {
     pub text: String,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineAnalysisRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub article_type: String,
+    pub file_paths: Vec<String>,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub max_context_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
+    pub system_prompt: Option<String>,
+    pub concurrency: Option<u32>,
+    pub short_config: Option<ReverseOutlineStageConfig>,
+    pub long_summary_config: Option<ReverseOutlineStageConfig>,
+    pub long_final_config: Option<ReverseOutlineStageConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineStageConfig {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub max_context_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
+    pub system_prompt: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineSaveRequest {
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineChapterPreview {
+    pub title: String,
+    pub path: String,
+    pub char_count: usize,
+}
+
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineAnalysisStarted {
+    pub run_id: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineProgressEvent {
+    pub run_id: String,
+    pub phase: String,
+    pub total_chapters: usize,
+    pub success_chapters: usize,
+    pub failed_chapters: usize,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineResultEvent {
+    pub run_id: String,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub error: Option<String>,
+    pub failed_batch_indices: Option<Vec<usize>>,
+    pub failed_batch_errors: Option<Vec<ReverseOutlineBatchError>>,
+    pub partial_summaries: Option<Vec<Value>>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineStreamEvent {
+    pub run_id: String,
+    pub delta: String,
+}
+
+#[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineBatchError {
+    pub index: usize,
+    pub range: String,
+    pub error: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineRetryRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub file_paths: Vec<String>,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub max_context_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
+    pub system_prompt: Option<String>,
+    pub concurrency: Option<u32>,
+    pub long_summary_config: Option<ReverseOutlineStageConfig>,
+    pub long_final_config: Option<ReverseOutlineStageConfig>,
+    pub failed_batch_indices: Vec<usize>,
+    pub partial_summaries: Vec<Value>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundExtractionStarted {
+    pub run_id: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundExtractionEvent {
+    pub run_id: String,
+    pub event_type: String,
+    pub delta: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseOutlineSaveResult {
+    pub path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BashPermissionRequestPayload {
     pub request_id: String,
     pub command: String,
@@ -300,6 +484,7 @@ pub struct OpenAiStreamEvent {
     pub content: Option<String>,
     pub reasoning_content: Option<String>,
     pub tool_call_chunks: Vec<OpenAiToolCallChunk>,
+    pub finish_reason: Option<String>,
 }
 pub struct OpenAiToolCallChunk {
     pub index: usize,
@@ -309,6 +494,9 @@ pub struct OpenAiToolCallChunk {
 }
 pub enum AnthropicStreamEvent {
     Text(String),
+    MessageDelta {
+        stop_reason: Option<String>,
+    },
     ThinkingStart {
         index: usize,
     },
@@ -429,5 +617,57 @@ mod tests {
         assert!(opts.allows_tool("read"));
         assert!(!opts.allows_tool("bash"));
         assert!(!opts.allows_tool("write"));
+    }
+
+    #[test]
+    fn test_reverse_outline_result_event_serializes_new_fields() {
+        let event = ReverseOutlineResultEvent {
+            run_id: "run-123".to_string(),
+            title: None,
+            content: None,
+            error: Some("部分失败".to_string()),
+            failed_batch_indices: Some(vec![1, 3]),
+            failed_batch_errors: Some(vec![ReverseOutlineBatchError {
+                index: 1,
+                range: "11-20".to_string(),
+                error: "HTTP 451".to_string(),
+            }]),
+            partial_summaries: Some(vec![serde_json::json!({"batchIndex": 0, "段落序号": "1-10"})]),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["runId"], "run-123");
+        assert_eq!(json["error"], "部分失败");
+        assert_eq!(json["failedBatchIndices"], serde_json::json!([1, 3]));
+        assert_eq!(json["failedBatchErrors"][0]["range"], "11-20");
+        assert_eq!(json["failedBatchErrors"][0]["error"], "HTTP 451");
+        assert_eq!(json["partialSummaries"][0]["batchIndex"], 0);
+    }
+
+    #[test]
+    fn test_reverse_outline_stream_event_serializes_delta() {
+        let event = ReverseOutlineStreamEvent {
+            run_id: "run-123".to_string(),
+            delta: "正在生成".to_string(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["runId"], "run-123");
+        assert_eq!(json["delta"], "正在生成");
+    }
+
+    #[test]
+    fn test_reverse_outline_retry_request_deserializes() {
+        let json = serde_json::json!({
+            "modelInterface": "OpenAI-compatible",
+            "baseUrl": "https://api.openai.com/v1",
+            "apiKey": "sk-test",
+            "model": "gpt-4o",
+            "filePaths": ["/tmp/test.md"],
+            "failedBatchIndices": [1, 3],
+            "partialSummaries": [{"batchIndex": 0, "段落序号": "1-10"}],
+        });
+        let req: ReverseOutlineRetryRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.model_interface, "OpenAI-compatible");
+        assert_eq!(req.failed_batch_indices, vec![1, 3]);
+        assert_eq!(req.partial_summaries.len(), 1);
     }
 }

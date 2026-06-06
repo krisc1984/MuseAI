@@ -1,24 +1,24 @@
-use crate::ActiveStreams;
 use crate::models::{ChatStreamEvent, ChatStreamRequest};
+use crate::ActiveStreams;
 use axum::{
-    Router,
     body::Body,
     extract::{Path as AxumPath, Query, Request, State},
-    http::{StatusCode, header},
-    response::{IntoResponse, Response, Sse, sse::Event},
+    http::{header, StatusCode},
+    response::{sse::Event, IntoResponse, Response, Sse},
     routing::{get, post, put},
+    Router,
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio_stream::StreamExt;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -309,7 +309,10 @@ async fn get_app_state<R: Runtime>(
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             return Ok(Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+                .header(
+                    header::CACHE_CONTROL,
+                    "no-store, no-cache, must-revalidate, max-age=0",
+                )
                 .body(Body::from(sanitized))
                 .unwrap());
         }
@@ -317,7 +320,10 @@ async fn get_app_state<R: Runtime>(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
         .body(Body::from(content))
         .unwrap())
 }
@@ -452,7 +458,10 @@ async fn list_sessions<R: Runtime>(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
         .body(Body::from(body))
         .unwrap())
 }
@@ -480,7 +489,10 @@ async fn load_session<R: Runtime>(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
         .body(Body::from(text))
         .unwrap())
 }
@@ -527,7 +539,10 @@ async fn save_session<R: Runtime>(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
         .body(Body::from(resp_body))
         .unwrap())
 }
@@ -615,7 +630,10 @@ async fn update_session_title<R: Runtime>(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
         .body(Body::from(resp_body))
         .unwrap())
 }
@@ -700,8 +718,13 @@ async fn summarize_title<R: Runtime>(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
-        .body(Body::from(serde_json::to_string(&json!({ "title": title })).unwrap()))
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
+        .body(Body::from(
+            serde_json::to_string(&json!({ "title": title })).unwrap(),
+        ))
         .unwrap())
 }
 
@@ -971,7 +994,10 @@ async fn analyze_session_memory<R: Runtime>(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
         .body(Body::from(result_str))
         .unwrap())
 }
@@ -1197,36 +1223,49 @@ fn compile_character_card_markdown(name: &str, fields: &Value) -> String {
             .map(|t| format!("`{}`", t.as_str().unwrap_or("")))
             .collect::<Vec<_>>()
             .join(" ");
-        if s.trim().is_empty() { String::new() } else { format!("## 身份标签\n{}\n\n", s) }
+        if s.trim().is_empty() {
+            String::new()
+        } else {
+            format!("## 身份标签\n{}\n\n", s)
+        }
     } else {
         String::new()
     };
 
-    let basic = section("基础信息", vec![
-        field_line("姓名", "").map(|_| format!("- **姓名**：{}", name)),
-        field_line("年龄", "age"),
-        field_line("性别", "gender"),
-        field_line("种族", "race"),
-        field_line("出生地", "birthplace"),
-        field_line("职业", "occupation"),
-        field_line("社会阶层", "socialClass"),
-    ]);
+    let basic = section(
+        "基础信息",
+        vec![
+            field_line("姓名", "").map(|_| format!("- **姓名**：{}", name)),
+            field_line("年龄", "age"),
+            field_line("性别", "gender"),
+            field_line("种族", "race"),
+            field_line("出生地", "birthplace"),
+            field_line("职业", "occupation"),
+            field_line("社会阶层", "socialClass"),
+        ],
+    );
 
-    let appearance = section("外貌气质", vec![
-        field_line("身高体型", "heightBuild"),
-        field_line("标志性特征", "iconicFeatures"),
-        field_line("衣着风格", "clothingStyle"),
-        field_line("整体气质", "overallVibe"),
-    ]);
+    let appearance = section(
+        "外貌气质",
+        vec![
+            field_line("身高体型", "heightBuild"),
+            field_line("标志性特征", "iconicFeatures"),
+            field_line("衣着风格", "clothingStyle"),
+            field_line("整体气质", "overallVibe"),
+        ],
+    );
 
-    let personality = section("性格特征", vec![
-        field_line("外在性格", "externalPersonality"),
-        field_line("内在性格", "internalPersonality"),
-        field_line("核心欲望", "coreDesire"),
-        field_line("恐惧和弱点", "fearWeakness"),
-        field_line("道德观念", "moralValues"),
-        field_line("怪癖", "quirk"),
-    ]);
+    let personality = section(
+        "性格特征",
+        vec![
+            field_line("外在性格", "externalPersonality"),
+            field_line("内在性格", "internalPersonality"),
+            field_line("核心欲望", "coreDesire"),
+            field_line("恐惧和弱点", "fearWeakness"),
+            field_line("道德观念", "moralValues"),
+            field_line("怪癖", "quirk"),
+        ],
+    );
 
     let skills = block_section("技能专长", "skills");
     let background = block_section("背景故事", "backgroundStory");
@@ -1234,17 +1273,31 @@ fn compile_character_card_markdown(name: &str, fields: &Value) -> String {
     let speaking = block_section("说话方式", "speakingStyle");
     let reactions = block_section("典型反应", "typicalReactions");
 
-    let memory = section("角色记忆", vec![
-        field_line("与用户关系类型", "userRelationType"),
-        field_line("与用户相处模式", "userInteractionModel"),
-        field_line("与用户关系底线", "userRelationBottomLine"),
-    ]);
+    let memory = section(
+        "角色记忆",
+        vec![
+            field_line("与用户关系类型", "userRelationType"),
+            field_line("与用户相处模式", "userInteractionModel"),
+            field_line("与用户关系底线", "userRelationBottomLine"),
+        ],
+    );
 
     let events = block_section("关键事件", "keyEvents");
 
     let result = format!(
         "# 角色卡：{}\n\n{}{}{}{}{}{}{}{}{}{}{}",
-        name, basic, tags_str, appearance, personality, skills, background, relationships, speaking, reactions, memory, events
+        name,
+        basic,
+        tags_str,
+        appearance,
+        personality,
+        skills,
+        background,
+        relationships,
+        speaking,
+        reactions,
+        memory,
+        events
     );
     result.trim().to_string() + "\n"
 }
@@ -1340,7 +1393,10 @@ async fn start_run_endpoint<R: Runtime>(
     let resp = json!({ "runId": run_id });
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
         .body(Body::from(serde_json::to_string(&resp).unwrap()))
         .unwrap())
 }
@@ -1624,12 +1680,10 @@ mod tests {
         let fields = &partner_json["state"]["characterCards"][0]["fields"];
         assert_eq!(fields["userRelationType"], "伙伴");
         assert_eq!(fields["keyEvents"], "共同完成一次对话");
-        assert!(
-            partner_json["state"]["characterCards"][0]["content"]
-                .as_str()
-                .unwrap()
-                .contains("共同完成一次对话")
-        );
+        assert!(partner_json["state"]["characterCards"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("共同完成一次对话"));
     }
 
     #[test]

@@ -163,7 +163,13 @@ mod tests {
 
     #[test]
     fn rename_item_cmd_success() {
-        let tmp = std::env::temp_dir().join(format!("museai_test_rename_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let tmp = std::env::temp_dir().join(format!(
+            "museai_test_rename_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
         fs::create_dir_all(&tmp).unwrap();
         let source = tmp.join("old.txt");
         fs::write(&source, "content").unwrap();
@@ -178,18 +184,30 @@ mod tests {
 
     #[test]
     fn rename_item_cmd_nonexistent() {
-        let result = rename_item_cmd("/nonexistent/path/file.txt".to_string(), "new.txt".to_string());
+        let result = rename_item_cmd(
+            "/nonexistent/path/file.txt".to_string(),
+            "new.txt".to_string(),
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn rename_item_cmd_duplicate_name() {
-        let tmp = std::env::temp_dir().join(format!("museai_test_rename_dup_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let tmp = std::env::temp_dir().join(format!(
+            "museai_test_rename_dup_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("a.txt"), "a").unwrap();
         fs::write(tmp.join("b.txt"), "b").unwrap();
 
-        let result = rename_item_cmd(tmp.join("a.txt").to_string_lossy().into_owned(), "b.txt".to_string());
+        let result = rename_item_cmd(
+            tmp.join("a.txt").to_string_lossy().into_owned(),
+            "b.txt".to_string(),
+        );
         assert!(result.is_err());
 
         let _ = fs::remove_dir_all(&tmp);
@@ -197,7 +215,13 @@ mod tests {
 
     #[test]
     fn move_item_cmd_success() {
-        let tmp = std::env::temp_dir().join(format!("museai_test_move_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let tmp = std::env::temp_dir().join(format!(
+            "museai_test_move_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
         let src_dir = tmp.join("src");
         let dest_dir = tmp.join("dest");
         fs::create_dir_all(&src_dir).unwrap();
@@ -205,7 +229,10 @@ mod tests {
         let file = src_dir.join("file.txt");
         fs::write(&file, "content").unwrap();
 
-        let result = move_item_cmd(file.to_string_lossy().into_owned(), dest_dir.to_string_lossy().into_owned());
+        let result = move_item_cmd(
+            file.to_string_lossy().into_owned(),
+            dest_dir.to_string_lossy().into_owned(),
+        );
         assert!(result.is_ok());
         assert!(!file.exists());
         assert!(dest_dir.join("file.txt").exists());
@@ -215,7 +242,13 @@ mod tests {
 
     #[test]
     fn create_untitled_item_cmd_file() {
-        let tmp = std::env::temp_dir().join(format!("museai_test_untitled_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let tmp = std::env::temp_dir().join(format!(
+            "museai_test_untitled_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
         fs::create_dir_all(&tmp).unwrap();
 
         let name = create_untitled_item_cmd(tmp.to_string_lossy().into_owned(), false).unwrap();
@@ -227,7 +260,13 @@ mod tests {
 
     #[test]
     fn create_untitled_item_cmd_dir() {
-        let tmp = std::env::temp_dir().join(format!("museai_test_untitled_dir_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let tmp = std::env::temp_dir().join(format!(
+            "museai_test_untitled_dir_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
         fs::create_dir_all(&tmp).unwrap();
 
         let name = create_untitled_item_cmd(tmp.to_string_lossy().into_owned(), true).unwrap();
@@ -239,7 +278,13 @@ mod tests {
 
     #[test]
     fn create_untitled_item_cmd_dedup() {
-        let tmp = std::env::temp_dir().join(format!("museai_test_untitled_dedup_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let tmp = std::env::temp_dir().join(format!(
+            "museai_test_untitled_dedup_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("未命名文件.md"), "").unwrap();
 

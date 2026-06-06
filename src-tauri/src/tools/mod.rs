@@ -20,20 +20,41 @@ pub mod registry;
 pub use registry::*;
 
 pub fn dangerous_command_reason(command: &str) -> Option<&'static str> {
-    let patterns = [
-        (
-            r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)",
-            "recursive delete on home/root",
-        ),
-        (r"\brm\s+(-\w*)?-rf\s", "force recursive delete"),
-        (r"\bmkfs\b", "format filesystem"),
-        (r"\bdd\s+.*of=/dev/", "raw disk write"),
-        (r">\s*/dev/sd[a-z]", "overwrite block device"),
-        (r"\bchmod\s+(-R\s+)?777\s+/", "chmod 777 on root"),
-        (r":\(\)\s*\{.*:\|:.*\}", "fork bomb"),
-        (r"\bcurl\b.*\|\s*(sudo\s+)?bash", "pipe curl to bash"),
-        (r"\bwget\b.*\|\s*(sudo\s+)?bash", "pipe wget to bash"),
-    ];
+    let patterns = if cfg!(target_os = "windows") {
+        vec![
+            (
+                r"\brmdir\s+/s\s+(C:\\\\|~|%USERPROFILE%|%HOMEDRIVE%)",
+                "recursive delete on system/home directory",
+            ),
+            (r"\brd\s+/s\s+", "force recursive delete"),
+            (r"\bdel\s+/f\s+/s\s+", "force recursive delete"),
+            (r"\bformat\s+[a-zA-Z]:", "format drive"),
+            (r"\bdiskpart\b", "disk partition manipulation"),
+            (
+                r"\bcurl\b.*\|\s*(sudo\s+)?powershell",
+                "pipe curl to powershell",
+            ),
+            (
+                r"\bwget\b.*\|\s*(sudo\s+)?powershell",
+                "pipe wget to powershell",
+            ),
+        ]
+    } else {
+        vec![
+            (
+                r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)",
+                "recursive delete on home/root",
+            ),
+            (r"\brm\s+(-\w*)?-rf\s", "force recursive delete"),
+            (r"\bmkfs\b", "format filesystem"),
+            (r"\bdd\s+.*of=/dev/", "raw disk write"),
+            (r">\s*/dev/sd[a-z]", "overwrite block device"),
+            (r"\bchmod\s+(-R\s+)?777\s+/", "chmod 777 on root"),
+            (r":\(\)\s*\{.*:\|:.*\}", "fork bomb"),
+            (r"\bcurl\b.*\|\s*(sudo\s+)?bash", "pipe curl to bash"),
+            (r"\bwget\b.*\|\s*(sudo\s+)?bash", "pipe wget to bash"),
+        ]
+    };
 
     patterns.iter().find_map(|(pattern, reason)| {
         Regex::new(pattern)
@@ -44,7 +65,11 @@ pub fn dangerous_command_reason(command: &str) -> Option<&'static str> {
 }
 
 fn avoid_command_reason(command: &str) -> Option<&'static str> {
-    let avoid_commands = ["cat", "head", "tail", "sed", "awk", "echo", "find", "grep"];
+    let avoid_commands = if cfg!(target_os = "windows") {
+        vec!["type", "findstr", "echo", "find", "dir"]
+    } else {
+        vec!["cat", "head", "tail", "sed", "awk", "echo", "find", "grep"]
+    };
 
     for cmd in avoid_commands.iter() {
         // Match word boundaries to prevent matching sub-strings (e.g., "concatenate" shouldn't match "cat")
@@ -59,7 +84,19 @@ fn avoid_command_reason(command: &str) -> Option<&'static str> {
 }
 
 fn shell_path() -> String {
-    env::var("SHELL").unwrap_or_else(|_| String::from("/bin/zsh"))
+    if cfg!(target_os = "windows") {
+        String::from("cmd.exe")
+    } else {
+        env::var("SHELL").unwrap_or_else(|_| String::from("/bin/zsh"))
+    }
+}
+
+fn shell_flag_and_arg(command: &str) -> (String, String) {
+    if cfg!(target_os = "windows") {
+        (String::from("/C"), command.to_string())
+    } else {
+        (String::from("-lc"), command.to_string())
+    }
 }
 
 pub fn ensure_write_path_allowed(
@@ -281,9 +318,10 @@ pub async fn tool_bash(
         .unwrap_or(DEFAULT_BASH_TIMEOUT_SECS)
         .clamp(1, MAX_BASH_TIMEOUT_SECS);
     let mut child_command = Command::new(shell_path());
+    let (flag, arg) = shell_flag_and_arg(&command);
     child_command
-        .arg("-lc")
-        .arg(&command)
+        .arg(&flag)
+        .arg(&arg)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

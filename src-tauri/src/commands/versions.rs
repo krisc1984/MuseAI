@@ -156,14 +156,20 @@ mod tests {
     fn get_versions_meta_path_basic() {
         let path = Path::new("/home/user/documents/story.md");
         let meta = get_versions_meta_path(path);
-        assert_eq!(meta, PathBuf::from("/home/user/documents/.versions/story.md.meta.json"));
+        assert_eq!(
+            meta,
+            PathBuf::from("/home/user/documents/.versions/story.md.meta.json")
+        );
     }
 
     #[test]
     fn get_version_file_path_basic() {
         let path = Path::new("/home/user/documents/story.md");
         let version = get_version_file_path(path, "v1");
-        assert_eq!(version, PathBuf::from("/home/user/documents/.versions/story.md/v1"));
+        assert_eq!(
+            version,
+            PathBuf::from("/home/user/documents/.versions/story.md/v1")
+        );
     }
 
     #[test]

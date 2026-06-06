@@ -18,9 +18,10 @@ interface WorkspaceDirectoryProps {
   dirType: 'articles' | 'references' | 'outline';
   selectedFile: string | null;
   onSelectFile: (file: string | null) => void;
+  footer?: React.ReactNode;
 }
 
-const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType, selectedFile, onSelectFile }) => {
+const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType, selectedFile, onSelectFile, footer }) => {
   const [nodes, setNodes] = useState<FileNode[]>([]);
   const [rootDir, setRootDir] = useState<string>('');
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
@@ -402,7 +403,7 @@ const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType,
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: footer ? '16px 16px 70px' : '16px', position: 'relative' }}>
       <Modal
         title="爬取互联网文章"
         open={isCrawlModalOpen}
@@ -477,6 +478,11 @@ const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType,
           )}
         </div>
       </Dropdown>
+      {footer && (
+        <div style={{ position: 'absolute', left: 16, right: 16, bottom: 16 }}>
+          {footer}
+        </div>
+      )}
     </div>
   );
 };

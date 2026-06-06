@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Button, Input, Tooltip, Empty, Card, Tabs, Tag, Row, Col, Space, Radio, Modal, Spin, message, Tree } from 'antd';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Button, Input, Tooltip, Empty, Card, Tabs, Tag, Row, Col, Space, Radio, Modal, Spin, message, Tree, Progress } from 'antd';
 import { 
   GlobalOutlined, 
   UserOutlined, 
@@ -14,15 +14,31 @@ import {
   BookOutlined,
   FileProtectOutlined,
   InfoCircleOutlined,
-  LoadingOutlined
+  LoadingOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ClockCircleOutlined
 } from '@ant-design/icons';
-import { usePartnerStore, PartnerItem, PartnerItemFields, CustomField } from '../stores/usePartnerStore';
+import { usePartnerStore, PartnerItem, PartnerItemFields, CustomField, normalizePartnerFields } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import {
+  BackgroundExtractionMode,
+  CharacterExtractionItem,
+  runCharacterExtractionBatch,
+  splitCharacterNames,
+} from '../utils/backgroundExtraction';
 
 const DIRECTORY_WIDTH = 280;
+const DEFAULT_BACKGROUND_CANCELLATION_SETTLE_MS = 15_000;
+
+const getBackgroundCancellationSettleMs = () => {
+  const testValue = (globalThis as { __MUSEAI_BACKGROUND_CANCELLATION_SETTLE_MS__?: number })
+    .__MUSEAI_BACKGROUND_CANCELLATION_SETTLE_MS__;
+  return typeof testValue === 'number' ? testValue : DEFAULT_BACKGROUND_CANCELLATION_SETTLE_MS;
+};
 
 const Background: React.FC = () => {
   const { 
@@ -43,11 +59,25 @@ const Background: React.FC = () => {
 
   const settings = useSettingsStore();
   const { importGeneratedItems } = usePartnerStore();
+  const backgroundExtractionConfig = settings.agentConfigs?.backgroundExtraction || {};
+  const backgroundWorldBookConfig = settings.agentConfigs?.backgroundWorldBook || {};
+  const backgroundCharacterCardConfig = settings.agentConfigs?.backgroundCharacterCard || {};
+  const backgroundCharacterConcurrency = Math.max(1, Math.min(20, backgroundExtractionConfig.concurrency ?? 5));
 
   // AI settings generation states
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isCancellingBackground, setIsCancellingBackground] = useState(false);
+  const [extractionMode, setExtractionMode] = useState<BackgroundExtractionMode>('world_book_and_character_cards');
+  const [extractionStep, setExtractionStep] = useState<'setup' | 'review' | 'characters'>('setup');
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentTaskIdRef = useRef<string | null>(null);
+  const [manualCharacterNames, setManualCharacterNames] = useState('');
+  const [reviewWorldBookName, setReviewWorldBookName] = useState('');
+  const [reviewWorldBookFieldsJson, setReviewWorldBookFieldsJson] = useState('');
+  const [reviewCharacterNames, setReviewCharacterNames] = useState('');
+  const [characterStatuses, setCharacterStatuses] = useState<CharacterExtractionItem<{ name: string; fields: PartnerItemFields }>[]>([]);
 
   // Folder Tree States for AI Settings Modal
   interface FileTreeNode {
@@ -65,6 +95,10 @@ const Background: React.FC = () => {
   const [isMemModalOpen, setIsMemModalOpen] = useState(false);
   const [optimizedEvents, setOptimizedEvents] = useState('');
   const [isOptimizing, setIsOptimizing] = useState(false);
+
+  const generateTaskId = useCallback(() => {
+    return 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+  }, []);
 
   const loadWorkspaceFiles = async () => {
     try {
@@ -133,55 +167,326 @@ const Background: React.FC = () => {
     if (isAiModalOpen) {
       loadWorkspaceFiles();
       setSelectedFilePaths([]);
+      setExtractionMode('world_book_and_character_cards');
+      setExtractionStep('setup');
+      setManualCharacterNames('');
+      setReviewWorldBookName('');
+      setReviewWorldBookFieldsJson('');
+      setReviewCharacterNames('');
+      setCharacterStatuses([]);
     }
   }, [isAiModalOpen]);
 
-  const handleGenerateBackground = async () => {
+  const readSelectedReferenceText = async () => {
     const selectedFileOnlyPaths = selectedFilePaths.filter(path => flatFiles.includes(path));
     if (selectedFileOnlyPaths.length === 0) {
       message.warning('请至少选择一个参考文件');
-      return;
+      return null;
     }
 
     if (!settings.llmApiKey) {
       message.warning('大模型 API Key 尚未配置，请先在设置页中配置');
+      return null;
+    }
+
+    let combinedText = '';
+    for (const path of selectedFileOnlyPaths) {
+      const fileContent: string = await invoke('read_file', { path });
+      const fileName = path.split(/[\\/]/).pop() || '';
+      combinedText += `\n\n### 文件: ${fileName}\n${fileContent}`;
+    }
+
+    if (combinedText.length > 100_000) {
+      message.warning('选中文件总字数超过10万字，内容过长可能导致提取失败。建议先在大纲页使用"AI反向分析大纲"功能，再基于精简后的大纲提取设定。');
+      return null;
+    }
+
+    return combinedText;
+  };
+
+  const currentWorldBookDraft = () => {
+    const name = reviewWorldBookName.trim() || '未命名世界书';
+    let fields: PartnerItemFields = {};
+    try {
+      fields = JSON.parse(reviewWorldBookFieldsJson || '{}');
+    } catch {
+      throw new Error('世界书字段 JSON 格式不正确，请检查后再确认');
+    }
+    return { name, fields };
+  };
+
+  const waitForBackgroundCancellation = async (taskId: string) => {
+    setIsCancellingBackground(true);
+    try {
+      try {
+        await invoke('cancel_background_task', { taskId });
+      } catch {
+        // ignore
+      }
+      await new Promise((resolve) => setTimeout(resolve, getBackgroundCancellationSettleMs()));
+    } finally {
+      setIsCancellingBackground(false);
+    }
+  };
+
+  const runCharacterExtraction = async (
+    combinedText: string,
+    worldBookContext?: string,
+    mode: 'new' | 'continue' | 'retry' = 'new',
+  ) => {
+    let names: string[] = [];
+    let initialItems: CharacterExtractionItem<{ name: string; fields: PartnerItemFields }>[] | undefined;
+
+    if (mode === 'new') {
+      const sourceNames = extractionMode === 'character_cards_only'
+        ? splitCharacterNames(manualCharacterNames)
+        : splitCharacterNames(reviewCharacterNames);
+      if (sourceNames.length === 0) {
+        message.warning('请至少输入一个角色名');
+        return;
+      }
+      names = sourceNames;
+    } else if (mode === 'continue') {
+      const pendingItems = characterStatuses.filter((item) => item.status === 'pending');
+      if (pendingItems.length === 0) {
+        message.info('没有待提取的角色');
+        return;
+      }
+      names = pendingItems.map((item) => item.name);
+      initialItems = characterStatuses.map((item) => ({ ...item }));
+    } else if (mode === 'retry') {
+      const failedItems = characterStatuses.filter(
+        (item) => item.status === 'failed'
+      );
+      if (failedItems.length === 0) {
+        message.info('没有失败的角色需要重试');
+        return;
+      }
+      names = failedItems.map((item) => item.name);
+      initialItems = characterStatuses.map((item) =>
+        item.status === 'failed'
+          ? { ...item, status: 'pending' as const, error: undefined, rawOutput: undefined }
+          : { ...item }
+      );
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const taskId = generateTaskId();
+    currentTaskIdRef.current = taskId;
+
+    setExtractionStep('characters');
+    setIsCancellingBackground(false);
+    setIsGenerating(true);
+    try {
+      const results = await runCharacterExtractionBatch<{ name: string; fields: PartnerItemFields }>({
+        names,
+        initialItems,
+        worker: async (characterName) => {
+          if (controller.signal.aborted) {
+            throw new Error('已中断');
+          }
+          return await invoke('generate_background_character_card', {
+            request: {
+              modelInterface: settings.modelInterface,
+              baseUrl: settings.llmBaseUrl,
+              apiKey: settings.llmApiKey,
+              model: settings.llmModel,
+              text: combinedText,
+              characterName,
+              worldBookContext,
+              temperature: backgroundCharacterCardConfig.temperature ?? 0,
+              maxOutputTokens: backgroundCharacterCardConfig.maxOutputTokens ?? 8192,
+              maxContextTokens: backgroundCharacterCardConfig.maxContextTokens ?? 128000,
+              thinkingDepth: backgroundCharacterCardConfig.thinkingDepth ?? 'off',
+              systemPrompt: settings.backgroundCharacterCardPrompt,
+              taskId,
+            },
+          });
+        },
+        concurrency: backgroundCharacterConcurrency,
+        onUpdate: setCharacterStatuses,
+        signal: controller.signal,
+      });
+
+      setCharacterStatuses(results);
+      const successfulCards = results
+        .filter((item): item is CharacterExtractionItem<{ name: string; fields: PartnerItemFields }> & { result: { name: string; fields: PartnerItemFields } } => item.status === 'success' && !!item.result)
+        .map((item) => item.result);
+
+      // 合并新的成功结果，避免重复导入
+      const existingNames = new Set(
+        characterStatuses
+          .filter((item) => item.status === 'success' && !!item.result)
+          .map((item) => item.result!.name)
+      );
+      const newCards = successfulCards.filter((card) => !existingNames.has(card.name));
+      if (newCards.length > 0) {
+        importGeneratedItems({ worldBooks: [], characterCards: newCards });
+      }
+
+      const pendingCount = results.filter((item) => item.status === 'pending').length;
+      const failedCount = results.filter((item) => item.status === 'failed').length;
+      const totalSuccess = results.filter((item) => item.status === 'success').length;
+
+      if (pendingCount > 0) {
+        // 被中断，有未完成的，不弹全局消息，由 UI 展示状态
+      } else if (failedCount > 0) {
+        message.warning(`角色卡提取完成：成功 ${totalSuccess} 个，失败 ${failedCount} 个。`);
+      } else {
+        message.success(`角色卡提取完成：成功 ${totalSuccess} 个。`);
+      }
+    } finally {
+      if (controller.signal.aborted && currentTaskIdRef.current) {
+        await waitForBackgroundCancellation(currentTaskIdRef.current);
+      }
+      setIsGenerating(false);
+      abortControllerRef.current = null;
+      currentTaskIdRef.current = null;
+    }
+  };
+
+  const handleStartExtraction = async () => {
+    const combinedText = await readSelectedReferenceText();
+    if (!combinedText) return;
+
+    if (extractionMode === 'character_cards_only') {
+      await runCharacterExtraction(combinedText, undefined, 'new');
       return;
     }
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const taskId = generateTaskId();
+    currentTaskIdRef.current = taskId;
+
+    setIsCancellingBackground(false);
     setIsGenerating(true);
     try {
-      // 1. Read files
-      let combinedText = '';
-      for (const path of selectedFileOnlyPaths) {
-        const fileContent: string = await invoke('read_file', { path });
-        const fileName = path.split(/[\\/]/).pop() || '';
-        combinedText += `\n\n### 文件: ${fileName}\n${fileContent}`;
-      }
-
-      // 2. Invoke Rust backend generate_background_items command
-      const resultString = await invoke<string>('generate_background_items', {
+      const invokePromise = invoke('generate_background_stage_one', {
         request: {
           modelInterface: settings.modelInterface,
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
           text: combinedText,
+          includeCharacterNames: extractionMode === 'world_book_and_character_cards',
+          temperature: backgroundWorldBookConfig.temperature ?? 0,
+          maxOutputTokens: backgroundWorldBookConfig.maxOutputTokens ?? 8192,
+          maxContextTokens: backgroundWorldBookConfig.maxContextTokens ?? 128000,
+          thinkingDepth: backgroundWorldBookConfig.thinkingDepth ?? 'off',
+          systemPrompt: settings.backgroundWorldBookPrompt,
+          taskId,
+        }
+      }) as Promise<{
+        worldBooks: Array<{ name: string; fields: PartnerItemFields }>;
+        characterNames: string[];
+      }>;
+
+      const abortPromise = new Promise<never>((_, reject) => {
+        const onAbort = () => reject(new Error('ABORTED'));
+        if (controller.signal.aborted) {
+          onAbort();
+        } else {
+          controller.signal.addEventListener('abort', onAbort, { once: true });
         }
       });
 
-      // 3. Parse JSON & Import
-      const data = JSON.parse(resultString);
-      importGeneratedItems(data);
+      const stageOneResult = await Promise.race([invokePromise, abortPromise]);
 
-      message.success('背景设定 AI 一键生成成功！已自动创建并选中相应项目。');
-      setIsAiModalOpen(false);
+      const worldBook = stageOneResult.worldBooks?.[0];
+      if (!worldBook) {
+        throw new Error('阶段一没有返回可编辑的世界书');
+      }
+      setReviewWorldBookName(worldBook.name || '未命名世界书');
+      setReviewWorldBookFieldsJson(JSON.stringify(worldBook.fields || {}, null, 2));
+      setReviewCharacterNames((stageOneResult.characterNames || []).join('\n'));
+      setExtractionStep('review');
     } catch (err) {
+      if (err instanceof Error && err.message === 'ABORTED') {
+        message.info('世界书提取已中断');
+        return;
+      }
       console.error('AI 生成设定失败:', err);
       message.error(`AI 提取设定失败：${String(err)}`);
     } finally {
+      if (controller.signal.aborted && currentTaskIdRef.current) {
+        await waitForBackgroundCancellation(currentTaskIdRef.current);
+      }
       setIsGenerating(false);
+      abortControllerRef.current = null;
+      currentTaskIdRef.current = null;
     }
   };
+
+  const handleConfirmReview = async () => {
+    try {
+      const worldBook = currentWorldBookDraft();
+      importGeneratedItems({ worldBooks: [worldBook], characterCards: [] });
+
+      if (extractionMode === 'world_book_only') {
+        message.success('世界书保存成功！');
+        setIsAiModalOpen(false);
+        return;
+      }
+
+      const combinedText = await readSelectedReferenceText();
+      if (!combinedText) return;
+      await runCharacterExtraction(
+        combinedText,
+        JSON.stringify(worldBook),
+        'new',
+      );
+    } catch (err) {
+      message.error(String(err));
+    }
+  };
+
+  const handleAiModalOk = () => {
+    if (extractionStep === 'review') {
+      handleConfirmReview();
+    } else if (extractionStep === 'characters') {
+      const hasPending = characterStatuses.some((item) => item.status === 'pending');
+      const hasFailed = characterStatuses.some((item) => item.status === 'failed');
+      if (hasPending) {
+        handleContinueExtraction();
+      } else if (hasFailed) {
+        handleRetryFailed();
+      } else {
+        setIsAiModalOpen(false);
+      }
+    } else {
+      handleStartExtraction();
+    }
+  };
+
+  const handleContinueExtraction = async () => {
+    const combinedText = await readSelectedReferenceText();
+    if (!combinedText) return;
+    await runCharacterExtraction(combinedText, undefined, 'continue');
+  };
+
+  const handleRetryFailed = async () => {
+    const combinedText = await readSelectedReferenceText();
+    if (!combinedText) return;
+    await runCharacterExtraction(combinedText, undefined, 'retry');
+  };
+
+  const aiModalOkText = extractionStep === 'review'
+    ? (extractionMode === 'world_book_only' ? '确认保存世界书' : '确认并生成角色卡')
+    : extractionStep === 'characters'
+      ? (characterStatuses.some((item) => item.status === 'pending')
+          ? '继续提取'
+          : characterStatuses.some((item) => item.status === 'failed')
+            ? '重试失败角色'
+            : '完成')
+      : '开始智能提取';
+
+  const completedCharacters = characterStatuses.filter((item) => item.status === 'success' || item.status === 'failed').length;
+  const totalCharacters = characterStatuses.length;
+  const characterProgressPercent = totalCharacters === 0
+    ? 0
+    : Math.round((completedCharacters / totalCharacters) * 100);
 
   const handleOptimizeMemories = async (currentEvents: string) => {
     if (!currentEvents.trim()) {
@@ -448,7 +753,7 @@ const Background: React.FC = () => {
 
   // Rendering World Book Config UI
   const renderWorldBookForm = (item: PartnerItem) => {
-    const fields = item.fields || {};
+    const fields = normalizePartnerFields(item.fields);
 
     return (
       <Space direction="vertical" size={20} style={{ width: '100%' }}>
@@ -564,7 +869,7 @@ const Background: React.FC = () => {
 
   // Rendering Character Card Config UI
   const renderCharacterCardForm = (item: PartnerItem) => {
-    const fields = item.fields || {};
+    const fields = normalizePartnerFields(item.fields);
 
     const tabItems = [
       {
@@ -1394,30 +1699,180 @@ const Background: React.FC = () => {
           </div>
         }
         open={isAiModalOpen}
-        onCancel={() => !isGenerating && setIsAiModalOpen(false)}
-        onOk={handleGenerateBackground}
-        okText="开始智能提取"
-        cancelText="取消"
-        confirmLoading={isGenerating}
-        width={640}
-        okButtonProps={{ disabled: isGenerating }}
+        onCancel={() => {
+          if (isGenerating) {
+            setIsCancellingBackground(true);
+            abortControllerRef.current?.abort();
+            const taskId = currentTaskIdRef.current;
+            if (taskId) {
+              invoke('cancel_background_task', { taskId }).catch(() => {});
+            }
+          } else {
+            setIsAiModalOpen(false);
+          }
+        }}
+        afterOpenChange={(open) => {
+          if (!open) {
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+            }
+            const taskId = currentTaskIdRef.current;
+            if (taskId) {
+              invoke('cancel_background_task', { taskId }).catch(() => {});
+            }
+          }
+        }}
+        closable={true}
+        mask={{ closable: !isGenerating }}
+        keyboard={!isGenerating}
+        onOk={handleAiModalOk}
+        okText={aiModalOkText}
+        cancelText={isCancellingBackground ? '正在释放连接' : isGenerating ? '中断提取' : '取消'}
+        width={720}
+        okButtonProps={{ loading: isGenerating, disabled: isGenerating }}
+        cancelButtonProps={{ danger: isGenerating, disabled: isCancellingBackground }}
         styles={{
           body: { padding: '16px 24px' }
         }}
       >
-        {isGenerating ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 0', gap: '16px' }}>
-            <Spin indicator={<LoadingOutlined style={{ fontSize: 32, color: '#d97757' }} spin />} />
-            <div style={{ color: '#8c8882', fontSize: '13px' }}>
-              AI 正在深度阅读并总结提炼背景设定中，请稍候...
+        {extractionStep === 'review' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ padding: '12px 16px', background: '#faf6f0', borderRadius: '8px', border: '1px solid #f2e8dc', color: '#8c8882', fontSize: '12px', lineHeight: 1.5 }}>
+              <InfoCircleOutlined style={{ color: '#d97757', marginRight: 6 }} />
+              请先检查并微调阶段一结果。确认后会保存世界书{extractionMode === 'world_book_and_character_cards' ? '，并按下方角色名继续生成角色卡。' : '。'}
+            </div>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 500, color: '#8c8882', marginBottom: '6px' }}>世界书名称</div>
+              <Input
+                value={reviewWorldBookName}
+                onChange={(e) => setReviewWorldBookName(e.target.value)}
+                className="custom-form-input"
+                placeholder="请输入世界书名称"
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 500, color: '#8c8882', marginBottom: '6px' }}>世界书字段</div>
+              <Input.TextArea
+                value={reviewWorldBookFieldsJson}
+                onChange={(e) => setReviewWorldBookFieldsJson(e.target.value)}
+                autoSize={{ minRows: 8, maxRows: 14 }}
+                className="custom-form-input"
+                style={{ fontFamily: 'Consolas, Monaco, "Courier New", monospace', fontSize: '13px' }}
+              />
+            </div>
+            {extractionMode === 'world_book_and_character_cards' && (
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 500, color: '#8c8882', marginBottom: '6px' }}>角色名列表</div>
+                <Input.TextArea
+                  value={reviewCharacterNames}
+                  onChange={(e) => setReviewCharacterNames(e.target.value)}
+                  autoSize={{ minRows: 4, maxRows: 8 }}
+                  className="custom-form-input"
+                  placeholder="每行输入一个角色名"
+                />
+              </div>
+            )}
+          </div>
+        ) : extractionStep === 'characters' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#8c8882', fontSize: '13px' }}>
+              {isGenerating && <Spin indicator={<LoadingOutlined style={{ fontSize: 16, color: '#d97757' }} spin />} size="small" />}
+              <span>
+                {isCancellingBackground
+                  ? '正在中断提取并等待模型服务释放连接...'
+                  : isGenerating
+                  ? 'AI 正在分布式生成角色卡...'
+                  : characterStatuses.some((item) => item.status === 'pending')
+                    ? `已暂停，还有 ${characterStatuses.filter((item) => item.status === 'pending').length} 个角色待提取`
+                    : characterStatuses.some((item) => item.status === 'failed')
+                      ? `角色卡生成已完成，${characterStatuses.filter((item) => item.status === 'failed').length} 个失败`
+                      : '角色卡生成已完成'}
+              </span>
+            </div>
+            <Progress percent={characterProgressPercent} strokeColor="#d97757" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: 320, overflowY: 'auto' }}>
+              {characterStatuses.map((item) => {
+                const statusMeta = item.status === 'success'
+                  ? { icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />, text: '成功', color: '#52c41a' }
+                  : item.status === 'failed'
+                    ? { icon: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />, text: '失败', color: '#ff4d4f' }
+                    : item.status === 'running'
+                      ? { icon: <LoadingOutlined spin style={{ color: '#d97757' }} />, text: '分析中', color: '#d97757' }
+                      : { icon: <ClockCircleOutlined style={{ color: '#c0bbb4' }} />, text: '等待中', color: '#8c8882' };
+                return (
+                  item.status === 'failed' ? (
+                    <details
+                      key={item.name}
+                      style={{ background: '#fafafa', border: '1px solid rgba(0,0,0,0.03)', borderRadius: 6, padding: '8px 10px' }}
+                    >
+                      <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ color: '#33312e', fontSize: 13 }}>{item.name}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: statusMeta.color, fontSize: 12 }}>
+                            {statusMeta.icon}
+                            {statusMeta.text}
+                          </span>
+                        </div>
+                      </summary>
+                      <div style={{ color: '#8c8882', fontSize: 12, lineHeight: 1.6, marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.04)' }}>
+                        <div style={{ color: '#33312e', fontWeight: 500, marginBottom: 4 }}>后端原始信息</div>
+                        <pre style={{ margin: 0, padding: 10, maxHeight: 220, overflow: 'auto', background: '#fff', border: '1px solid rgba(0,0,0,0.04)', borderRadius: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'Consolas, Monaco, "Courier New", monospace', fontSize: 12 }}>
+                          {item.rawOutput || item.error || '未返回失败详情'}
+                        </pre>
+                      </div>
+                    </details>
+                  ) : (
+                    <div key={item.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: '#fafafa', borderRadius: 6, border: '1px solid rgba(0,0,0,0.03)' }}>
+                      <span style={{ color: '#33312e', fontSize: 13 }}>{item.name}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: statusMeta.color, fontSize: 12 }}>
+                        {statusMeta.icon}
+                        {statusMeta.text}
+                      </span>
+                    </div>
+                  )
+                );
+              })}
             </div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ padding: '12px 16px', background: '#faf6f0', borderRadius: '8px', border: '1px solid #f2e8dc', color: '#8c8882', fontSize: '12px', lineHeight: 1.5 }}>
               <InfoCircleOutlined style={{ color: '#d97757', marginRight: 6 }} />
-              <strong>提示：</strong>选择您已有的作品、大纲或参考范文（可多选），大模型将自动阅读并为您整理提炼出一本结构化的世界书设定及相关的角色卡，并在左侧目录中创建。
+              <strong>提示：</strong>选择您已有的作品、大纲或参考范文（可多选），大模型将按所选模式提取世界书或角色卡。完整模式会先让您确认世界书和角色名，再继续生成角色卡。
             </div>
+
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 500, color: '#8c8882', marginBottom: '6px' }}>
+                提取模式
+              </div>
+                <Radio.Group
+                  value={extractionMode}
+                  onChange={(e) => setExtractionMode(e.target.value)}
+                  disabled={isGenerating}
+                  optionType="button"
+                  buttonStyle="solid"
+                  options={[
+                  { label: '提取世界书和角色卡', value: 'world_book_and_character_cards' },
+                  { label: '仅提取世界书', value: 'world_book_only' },
+                  { label: '仅提取角色卡', value: 'character_cards_only' },
+                ]}
+              />
+            </div>
+
+            {extractionMode === 'character_cards_only' && (
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 500, color: '#8c8882', marginBottom: '6px' }}>
+                  角色名列表
+                </div>
+                <Input.TextArea
+                  value={manualCharacterNames}
+                  onChange={(e) => setManualCharacterNames(e.target.value)}
+                  autoSize={{ minRows: 3, maxRows: 6 }}
+                  className="custom-form-input"
+                  placeholder="每行输入一个角色名"
+                />
+              </div>
+            )}
 
             <div style={{ maxHeight: '380px', overflowY: 'auto', paddingRight: '4px' }}>
               {/* Category: Works */}

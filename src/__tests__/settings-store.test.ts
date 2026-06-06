@@ -6,7 +6,12 @@ import {
   defaultWorkSummaryPrompt,
   defaultOutlineCreationPrompt,
   defaultOutlineAssessmentPrompt,
+  defaultReverseOutlineShortPrompt,
+  defaultReverseOutlineLongSummaryPrompt,
+  defaultReverseOutlineLongFinalPrompt,
   defaultPartnerChatPrompt,
+  defaultBackgroundWorldBookPrompt,
+  defaultBackgroundCharacterCardPrompt,
   defaultStoryAgentPrompt,
   defaultStoryDynamicAgentPrompt,
   useSettingsStore,
@@ -45,6 +50,39 @@ describe('Settings store default exports', () => {
     expect(defaultOutlineAssessmentPrompt).toContain('设定新鲜感');
   });
 
+  it('should keep reverse outline defaults separate by stage', () => {
+    const { agentConfigs } = useSettingsStore.getState();
+
+    expect(agentConfigs.reverseOutline.concurrency).toBe(5);
+    expect(agentConfigs.reverseOutlineShort).toEqual({
+      temperature: 0.3,
+      maxOutputTokens: 32000,
+      maxContextTokens: 200000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.reverseOutlineLongSummary).toEqual({
+      temperature: 0.3,
+      maxOutputTokens: 8192,
+      maxContextTokens: 200000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.reverseOutlineLongFinal).toEqual({
+      temperature: 0.3,
+      maxOutputTokens: 32000,
+      maxContextTokens: 200000,
+      thinkingDepth: 'off',
+    });
+    expect(defaultReverseOutlineShortPrompt).toContain('不超过10000字');
+    expect(defaultReverseOutlineShortPrompt).toContain('文章类型');
+    expect(defaultReverseOutlineShortPrompt).toContain('标签');
+    expect(defaultReverseOutlineShortPrompt).toContain('导语');
+    expect(defaultReverseOutlineLongSummaryPrompt).toContain('不超过300字');
+    expect(defaultReverseOutlineLongSummaryPrompt).toContain('仅输出主要剧情事件');
+    expect(defaultReverseOutlineLongFinalPrompt).toContain('不超过10000字');
+    expect(defaultReverseOutlineLongFinalPrompt).toContain('基础信息设定');
+    expect(defaultReverseOutlineLongFinalPrompt).toContain('核心人物设定');
+  });
+
   it('defaultPartnerChatPrompt should contain roleplay constraints', () => {
     expect(defaultPartnerChatPrompt).toContain('严格扮演角色');
     expect(defaultPartnerChatPrompt).toContain('口语化与对话感');
@@ -76,5 +114,25 @@ describe('Settings store default exports', () => {
       maxContextTokens: 128000,
       thinkingDepth: 'off',
     });
+  });
+
+  it('should keep background extraction defaults separate for world book and character card', () => {
+    const state = useSettingsStore.getState();
+
+    expect(state.agentConfigs.backgroundExtraction.concurrency).toBe(5);
+    expect(state.agentConfigs.backgroundWorldBook).toEqual({
+      temperature: 0,
+      maxOutputTokens: 8192,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(state.agentConfigs.backgroundCharacterCard).toEqual({
+      temperature: 0,
+      maxOutputTokens: 8192,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(defaultBackgroundWorldBookPrompt).toContain('世界观与人物设定专家');
+    expect(defaultBackgroundCharacterCardPrompt).toContain('人物设定专家');
   });
 });

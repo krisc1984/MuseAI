@@ -181,7 +181,7 @@ pub fn crawl_fanqie_article(
     let reader_match = Regex::new(r"/reader/(\d+)").unwrap().captures(url);
     if let Some(cap) = reader_match {
         let chapter_id = cap[1].to_string();
-        
+
         let (title, content) = fetch_chapter_content(&client, &chapter_id)?;
         let decrypted = decrypt_text(&content);
         let cleaned = clean_html_content(&decrypted);
@@ -203,7 +203,10 @@ pub fn crawl_fanqie_article(
 
         fs::write(&file_path, md_content).map_err(|e| format!("保存文件失败: {}", e))?;
 
-        return Ok(format!("成功爬取单章/短篇小说并保存至: {}", file_path.display()));
+        return Ok(format!(
+            "成功爬取单章/短篇小说并保存至: {}",
+            file_path.display()
+        ));
     }
 
     let book_id_match = Regex::new(r"/page/(\d+)").unwrap().captures(url);

@@ -348,6 +348,7 @@ async fn stream_anthropic_round(
                     } => {
                         result.push_tool_arguments(index, &partial_json);
                     }
+                    AnthropicStreamEvent::MessageDelta { .. } => {}
                 }
             }
         });
@@ -704,7 +705,43 @@ async fn execute_agent_tool(
         );
     }
 
-    let parsed = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
+    let parsed = match serde_json::from_str::<Value>(arguments) {
+        Ok(value) => value,
+        Err(error) => {
+            let error_msg = format!(
+                "status: error\nError: Invalid tool arguments JSON: {}. Raw arguments: {}",
+                error, arguments
+            );
+            if options.emit_events {
+                emit_tool_event(
+                    app,
+                    run_id,
+                    "tool_output",
+                    tool_call_id,
+                    tool_name,
+                    Some("error"),
+                    None,
+                    Some(error_msg.clone()),
+                    &options,
+                );
+                emit_tool_event(
+                    app,
+                    run_id,
+                    "tool_end",
+                    tool_call_id,
+                    tool_name,
+                    Some("error"),
+                    None,
+                    Some(error_msg.clone()),
+                    &options,
+                );
+            }
+            return AgentToolExecution {
+                success: false,
+                model_output: error_msg,
+            };
+        }
+    };
     let execution = match execute_agent_tool_inner(
         app,
         run_id,
@@ -947,7 +984,11 @@ pub fn resolve_role_play_character<'a>(
     Err(format!(
         "角色“{}”不可用或不唯一。当前可用角色：{}",
         target,
-        if available.is_empty() { "无" } else { &available }
+        if available.is_empty() {
+            "无"
+        } else {
+            &available
+        }
     ))
 }
 pub fn build_role_play_system_prompt(
@@ -969,7 +1010,11 @@ pub fn build_role_play_system_prompt(
         prompt.push_str(&user_info);
     }
     prompt.push_str("\n\n## 当前扮演角色卡\n");
-    prompt.push_str(&format!("【角色：{}】\n{}", character.name, character.content.trim()));
+    prompt.push_str(&format!(
+        "【角色：{}】\n{}",
+        character.name,
+        character.content.trim()
+    ));
     prompt
 }
 pub fn build_role_play_history_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
@@ -1217,13 +1262,44 @@ pub fn normalize_agent_tool_output(success: bool, output: &str) -> String {
 pub fn parse_tool_arguments(arguments: &str) -> Value {
     serde_json::from_str(arguments).unwrap_or_else(|_| json!({}))
 }
+
+fn json_value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 pub fn required_string(input: &Value, key: &str) -> Result<String, String> {
-    input
-        .get(key)
-        .and_then(Value::as_str)
-        .map(String::from)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| format!("Error: {} is required", key))
+    match input.get(key) {
+        None => {
+            let actual =
+                serde_json::to_string(input).unwrap_or_else(|_| String::from("(invalid json)"));
+            Err(format!(
+                "Error: {} is required. Received arguments: {}",
+                key, actual
+            ))
+        }
+        Some(value) => match value.as_str() {
+            None => {
+                let actual_type = json_value_type_name(value);
+                let actual =
+                    serde_json::to_string(value).unwrap_or_else(|_| String::from("(invalid json)"));
+                Err(format!(
+                    "Error: {} is required and must be a string, but got {}: {}",
+                    key, actual_type, actual
+                ))
+            }
+            Some(s) if s.trim().is_empty() => {
+                Err(format!("Error: {} is required and cannot be empty.", key))
+            }
+            Some(s) => Ok(s.to_string()),
+        },
+    }
 }
 
 pub fn optional_string(input: &Value, key: &str) -> Option<String> {

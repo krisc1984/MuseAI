@@ -321,7 +321,10 @@ pub fn get_writing_stats(app: AppHandle) -> Result<models::WritingStats, String>
             .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
         let count = daily_counts.get(&date_str).copied().unwrap_or(0);
-        daily_activity.push(models::DailyActivity { date: date_str, count });
+        daily_activity.push(models::DailyActivity {
+            date: date_str,
+            count,
+        });
     }
 
     Ok(models::WritingStats {
@@ -335,7 +338,10 @@ pub fn load_app_state_path(base: &Path, name: &str) -> Result<String, String> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("非法的状态名称".to_string());
     }
-    let path = base.join("MuseAI").join("config").join(format!("{}.json", name));
+    let path = base
+        .join("MuseAI")
+        .join("config")
+        .join(format!("{}.json", name));
     fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
