@@ -334,13 +334,10 @@ fn build_user_prompt(
         BookTravelRole::InputClassifier => {
             "请输出严格 JSON，字段为 classification 与 reason。classification 只能是 meta、insert-beat、change-scene。"
         }
-        BookTravelRole::ScenePlanner => concat!(
-            "请输出严格 JSON，字段为 stateChanges、divergence、storyProgress、endingStatus、sceneGoals、entryBeatGuidance、allowedCast、writerInstructions。",
+        BookTravelRole::ScenePlanner => {
             "规划前检查世界规则、用户资源、已知信息、当前时间与地点。"
-        ),
-        BookTravelRole::SceneWriter => {
-            "请输出严格 JSON，字段为 id、title、summary、currentSituation、time、location、activeCharacters、beats、volatileMemoryPatch。不得输出 stableMemoryPatch。"
         }
+        BookTravelRole::SceneWriter => "",
         BookTravelRole::MemoryKeeper => {
             "请输出严格 JSON，字段为 summary、keyChoices、unresolvedConflicts、divergenceFromOutline。"
         }
@@ -356,7 +353,7 @@ fn build_user_prompt(
     };
 
     Ok(format!(
-        "{prefix}## 选中素材\n{material_text}\n\n## 当前穿书状态\n{state_text}\n\n## 用户输入或本轮任务\n{input_text}\n\n只返回 JSON，不要 Markdown 代码块，不要额外解释。"
+        "{prefix}## 选中素材\n{material_text}\n\n## 当前穿书状态\n{state_text}\n\n## 用户输入或本轮任务\n{input_text}"
     ))
 }
 

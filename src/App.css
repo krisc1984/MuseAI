@@ -37,6 +37,11 @@ body {
   width: 100%;
 }
 
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 .mobile-shell {
   position: fixed;
   inset: 0;

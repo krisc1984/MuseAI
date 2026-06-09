@@ -137,8 +137,8 @@ const Story: React.FC = () => {
   const [, setIsTransitioningScene] = useState(false);
   const [startProgressOpen, setStartProgressOpen] = useState(false);
   const [startProgressPhase, setStartProgressPhase] = useState<'planner' | 'writer' | 'done' | 'error' | 'cancelled'>('planner');
-  const [, setPlannerOutput] = useState('');
-  const [, setWriterOutput] = useState('');
+  const [plannerOutput, setPlannerOutput] = useState('');
+  const [writerOutput, setWriterOutput] = useState('');
   const [startProgressError, setStartProgressError] = useState('');
   const [startElapsedMs, setStartElapsedMs] = useState(0);
   const startRunIdRef = useRef<string | null>(null);
@@ -1288,9 +1288,11 @@ const Story: React.FC = () => {
         onCancel={handleCancelStart}
         footer={
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button onClick={handleCancelStart} disabled={startProgressPhase === 'done' || startProgressPhase === 'error' || startProgressPhase === 'cancelled'}>
-              中断
-            </Button>
+            {startProgressPhase === 'error' || startProgressPhase === 'cancelled' || startProgressPhase === 'done' ? (
+              <Button onClick={() => setStartProgressOpen(false)}>关闭</Button>
+            ) : (
+              <Button onClick={handleCancelStart}>中断</Button>
+            )}
           </div>
         }
         width={600}
@@ -1298,17 +1300,28 @@ const Story: React.FC = () => {
         maskClosable={false}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {startProgressPhase === 'planner' && (
+          {(startProgressPhase === 'planner' || startProgressPhase === 'writer') && (
             <div>
               <div style={{ color: '#8c8882', fontSize: 13, marginBottom: 8 }}>
-                剧情规划师正在分析你的行动...
+                {startProgressPhase === 'planner' ? '剧情规划师正在分析你的行动...' : '场景写手正在生成新的剧情...'}
               </div>
-            </div>
-          )}
-          {startProgressPhase === 'writer' && (
-            <div>
-              <div style={{ color: '#8c8882', fontSize: 13, marginBottom: 8 }}>
-                场景写手正在生成新的剧情...
+              <div
+                style={{
+                  background: '#faf9f5',
+                  border: '1px solid #eae6df',
+                  borderRadius: 8,
+                  padding: 12,
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  color: '#33312e',
+                  maxHeight: 320,
+                  overflowY: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {startProgressPhase === 'planner' ? plannerOutput : writerOutput}
+                <span style={{ display: 'inline-block', width: 2, height: 16, background: '#d97757', marginLeft: 2, verticalAlign: 'middle', animation: 'blink 1s step-end infinite' }} />
               </div>
             </div>
           )}
@@ -1339,11 +1352,16 @@ const Story: React.FC = () => {
           <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {sessionTitle}
             <span style={{ fontSize: 12, color: '#8c8882', fontWeight: 400 }}>
-              ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色{dynamicRoleLoadingEnabled ? ' · 动态加载' : ''})
-              {bookTravelStore.scenes.length > 0 && (
+              {bookTravelStore.selectedMaterialId || bookTravelStore.scenes.length > 0 ? (
                 <Tag color="#d97757" style={{ marginLeft: 8, borderRadius: 4 }}>
-                  穿书中 · {bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId)?.title || '场景'}
+                  {bookTravelStore.scenes.length > 0
+                    ? `穿书中 · ${bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId)?.title || '场景'}`
+                    : '穿书准备中'}
                 </Tag>
+              ) : (
+                <>
+                  ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色{dynamicRoleLoadingEnabled ? ' · 动态加载' : ''})
+                </>
               )}
             </span>
           </h3>
