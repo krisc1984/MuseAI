@@ -13,6 +13,7 @@ import {
   UserOutlined,
   BookOutlined,
   FileProtectOutlined,
+  SaveOutlined,
   RedoOutlined,
   EditOutlined
 } from '@ant-design/icons';
@@ -168,6 +169,7 @@ const Chat: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSavingConversation, setIsSavingConversation] = useState(false);
   const [archiveAnalysis, setArchiveAnalysis] = useState<any>(null);
 
   const [editedTitle, setEditedTitle] = useState('');
@@ -284,9 +286,6 @@ const Chat: React.FC = () => {
         activeRunRef.current = { runId: null, messageId: null };
         setActiveRun({ runId: null, messageId: null });
         setIsStreaming(false);
-        window.setTimeout(() => {
-          void saveCurrentSession();
-        }, 0);
       }
     }).then((fn) => {
       unlistenFn = fn;
@@ -349,35 +348,6 @@ const Chat: React.FC = () => {
     setInput('');
     setIsStreaming(true);
     scrollToBottomOnce();
-
-    const isFirstUserMessage = !messages.some(m => m.role === 'user');
-    if (isFirstUserMessage) {
-      const fallbackTitle = trimmed.length > 24 ? `${trimmed.slice(0, 24)}...` : trimmed;
-      sessionTitleRef.current = fallbackTitle;
-      setSessionTitle(fallbackTitle);
-      void saveCurrentSession();
-
-      // Background title summarization
-      invoke<string>('summarize_text', {
-        request: {
-          modelInterface: settings.modelInterface,
-          baseUrl: settings.llmBaseUrl,
-          apiKey: settings.llmApiKey,
-          model: settings.llmModel,
-          temperature: settings.agentConfigs?.partnerChat?.temperature ?? 0.3,
-          maxOutputTokens: 64,
-          text: trimmed,
-        },
-      }).then(async (generatedTitle) => {
-        const currentId = sessionIdRef.current;
-        sessionTitleRef.current = generatedTitle;
-        setSessionTitle(generatedTitle);
-        await invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
-        await saveCurrentSession();
-      }).catch((e) => {
-        console.error('生成伴侣会话标题失败:', e);
-      });
-    }
 
     try {
       // Map Zustand Messages to LLM API message schema
@@ -450,7 +420,6 @@ const Chat: React.FC = () => {
       messagesRef.current = nextMessages;
       setEditingMessageId(null);
       setEditingContent('');
-      await saveCurrentSession();
     } else {
       const userIdx = messages.findIndex(m => m.id === msg.id);
       if (userIdx === -1) return;
@@ -618,6 +587,40 @@ const Chat: React.FC = () => {
     }
   };
 
+  const handleSaveConversation = async () => {
+    if (messages.length === 0 || isStreaming || isSessionArchived) {
+      message.warning('当前无可保存的对话内容');
+      return;
+    }
+    setIsSavingConversation(true);
+    try {
+      const chatHistoryText = messages
+        .filter(m => m.role === 'user' || m.role === 'agent')
+        .map(m => `${m.role === 'user' ? '我' : '故事旁白与NPC'}: ${m.content.replace(/\[\[THINKING:[^\]]+\]\]/g, '').trim()}`)
+        .join('\n\n');
+      const generatedTitle = await invoke<string>('summarize_text', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: settings.agentConfigs?.partnerChat?.temperature ?? 0.3,
+          maxOutputTokens: 64,
+          text: chatHistoryText,
+        },
+      });
+      sessionTitleRef.current = generatedTitle;
+      setSessionTitle(generatedTitle);
+      await saveCurrentSession();
+      message.success('对话已保存');
+    } catch (err) {
+      console.error('保存对话失败:', err);
+      message.error(`保存对话失败：${String(err)}`);
+    } finally {
+      setIsSavingConversation(false);
+    }
+  };
+
   const openSession = async (id: string) => {
     try {
       const session = await invoke<AgentSessionRecord>('load_agent_session', { id });
@@ -727,8 +730,7 @@ const Chat: React.FC = () => {
       sessionTitleRef.current = finalTitle;
       isSessionArchivedRef.current = true;
 
-      // 4. Update session title on backend and save the session
-      await invoke('update_agent_session_title', { id: sessionIdRef.current, title: finalTitle });
+      // 4. Save the archived session
       await saveCurrentSession();
 
       message.success('伴侣记忆封存成功！当前会话已锁定归档。');
@@ -924,24 +926,45 @@ const Chat: React.FC = () => {
 
         <div className="agent-chat__header-actions">
           {selectedCharacterCard && (
-            <Tooltip title={isSessionArchived ? "当前会话的记忆已封存到角色卡" : "封存本场对话记忆到角色卡并归档"}>
-              <Button
-                type="text"
-                disabled={isStreaming || isSessionArchived || messages.length === 0}
-                icon={<FileProtectOutlined />}
-                onClick={handleArchiveMemory}
-                style={{
-                  color: (isSessionArchived || messages.length === 0) ? '#8c8882' : '#d97757',
-                  fontWeight: 500,
-                  fontSize: 13,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4
-                }}
-              >
-                封存记忆
-              </Button>
-            </Tooltip>
+            <>
+              <Tooltip title="保存当前对话">
+                <Button
+                  type="text"
+                  loading={isSavingConversation}
+                  disabled={isStreaming || isSessionArchived || messages.length === 0 || isSavingConversation}
+                  icon={<SaveOutlined />}
+                  onClick={() => void handleSaveConversation()}
+                  style={{
+                    color: (isSessionArchived || messages.length === 0) ? '#8c8882' : '#d97757',
+                    fontWeight: 500,
+                    fontSize: 13,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  保存对话
+                </Button>
+              </Tooltip>
+              <Tooltip title={isSessionArchived ? "当前会话的记忆已封存到角色卡" : "封存本场对话记忆到角色卡并归档"}>
+                <Button
+                  type="text"
+                  disabled={isStreaming || isSessionArchived || messages.length === 0}
+                  icon={<FileProtectOutlined />}
+                  onClick={handleArchiveMemory}
+                  style={{
+                    color: (isSessionArchived || messages.length === 0) ? '#8c8882' : '#d97757',
+                    fontWeight: 500,
+                    fontSize: 13,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  封存记忆
+                </Button>
+              </Tooltip>
+            </>
           )}
 
           <Tooltip title="清除当前上下文">

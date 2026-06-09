@@ -148,6 +148,7 @@ pub struct AgentSessionRecord {
     pub id: String,
     pub title: String,
     pub saved_at: u64,
+    pub session_kind: Option<String>,
     pub messages: Vec<AgentSessionMessage>,
     pub selected_reference_files: Vec<String>,
     pub selected_outline_file: Option<String>,
@@ -158,6 +159,7 @@ pub struct AgentSessionRecord {
     pub character_card_ids: Option<Vec<String>>,
     pub selected_world_book_id: Option<String>,
     pub dynamic_role_loading_enabled: Option<bool>,
+    pub book_travel_state: Option<Value>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,6 +167,7 @@ pub struct AgentSessionSummary {
     pub id: String,
     pub title: String,
     pub saved_at: u64,
+    pub session_kind: Option<String>,
     pub character_card_id: Option<String>,
     pub character_card_ids: Option<Vec<String>>,
     pub selected_world_book_id: Option<String>,
@@ -392,6 +395,21 @@ pub struct BackgroundExtractionStarted {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundExtractionEvent {
+    pub run_id: String,
+    pub event_type: String,
+    pub delta: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookTravelStreamStarted {
+    pub run_id: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookTravelStreamEvent {
     pub run_id: String,
     pub event_type: String,
     pub delta: Option<String>,
@@ -633,7 +651,9 @@ mod tests {
                 range: "11-20".to_string(),
                 error: "HTTP 451".to_string(),
             }]),
-            partial_summaries: Some(vec![serde_json::json!({"batchIndex": 0, "段落序号": "1-10"})]),
+            partial_summaries: Some(vec![
+                serde_json::json!({"batchIndex": 0, "段落序号": "1-10"}),
+            ]),
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["runId"], "run-123");
@@ -670,5 +690,27 @@ mod tests {
         assert_eq!(req.model_interface, "OpenAI-compatible");
         assert_eq!(req.failed_batch_indices, vec![1, 3]);
         assert_eq!(req.partial_summaries.len(), 1);
+    }
+
+    #[test]
+    fn test_book_travel_stream_event_serialization() {
+        let started = BookTravelStreamStarted {
+            run_id: "run-start".to_string(),
+        };
+        let event = BookTravelStreamEvent {
+            run_id: "run-event".to_string(),
+            event_type: "delta".to_string(),
+            delta: Some("hello".to_string()),
+            message: Some("done message".to_string()),
+        };
+        
+        let started_json = serde_json::to_value(&started).unwrap();
+        let event_json = serde_json::to_value(&event).unwrap();
+        
+        assert_eq!(started_json["runId"], "run-start");
+        assert_eq!(event_json["runId"], "run-event");
+        assert_eq!(event_json["eventType"], "delta");
+        assert_eq!(event_json["delta"], "hello");
+        assert_eq!(event_json["message"], "done message");
     }
 }

@@ -437,6 +437,7 @@ async fn list_sessions<R: Runtime>(
             }
         }
         if (record.id.starts_with("partner-session-") || record.id.starts_with("story-session-"))
+            && record.session_kind.as_deref() != Some("bookTravel")
             && record.is_archived != Some(true)
         {
             continue;
@@ -445,6 +446,7 @@ async fn list_sessions<R: Runtime>(
             id: record.id,
             title: record.title,
             saved_at: record.saved_at,
+            session_kind: record.session_kind,
             character_card_id: record.character_card_id,
             character_card_ids: record.character_card_ids,
             selected_world_book_id: record.selected_world_book_id,
@@ -528,6 +530,7 @@ async fn save_session<R: Runtime>(
         id: record.id.clone(),
         title: record.title.clone(),
         saved_at: record.saved_at,
+        session_kind: record.session_kind,
         character_card_id: record.character_card_id,
         character_card_ids: record.character_card_ids,
         selected_world_book_id: record.selected_world_book_id,
@@ -619,6 +622,7 @@ async fn update_session_title<R: Runtime>(
         id: record.id.clone(),
         title: record.title.clone(),
         saved_at: record.saved_at,
+        session_kind: record.session_kind,
         character_card_id: record.character_card_id,
         character_card_ids: record.character_card_ids,
         selected_world_book_id: record.selected_world_book_id,

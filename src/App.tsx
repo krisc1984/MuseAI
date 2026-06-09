@@ -9,7 +9,9 @@ import Examples from './pages/Examples';
 import Background from './pages/Background';
 import Chat from './pages/Chat';
 import Story from './pages/Story';
+import Adventure from './pages/Adventure';
 import Bond from './pages/Bond';
+import BookTravelMaterials from './pages/BookTravelMaterials';
 
 // Mobile components
 import MobileShell from './components/MobileShell';
@@ -80,8 +82,10 @@ function App() {
             <Route path="outline" element={<Outline />} />
             <Route path="background" element={<Background />} />
             <Route path="chat" element={<Chat />} />
+            <Route path="adventure" element={<Adventure />} />
             <Route path="story" element={<Story />} />
             <Route path="bond" element={<Bond />} />
+            <Route path="book-travel-materials" element={<BookTravelMaterials />} />
           </Route>
         )}
       </Routes>

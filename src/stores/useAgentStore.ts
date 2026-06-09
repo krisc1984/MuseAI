@@ -47,6 +47,7 @@ export interface AgentSessionSummary {
   id: string;
   title: string;
   savedAt: number;
+  sessionKind?: 'chat' | 'story' | 'bookTravel';
   characterCardId?: string | null;
   characterCardIds?: string[] | null;
   selectedWorldBookId?: string | null;
@@ -64,6 +65,7 @@ export interface AgentSessionRecord extends AgentSessionSummary {
   characterCardIds?: string[] | null;
   selectedWorldBookId?: string | null;
   dynamicRoleLoadingEnabled?: boolean;
+  bookTravelState?: unknown;
 }
 
 function createSessionId() {

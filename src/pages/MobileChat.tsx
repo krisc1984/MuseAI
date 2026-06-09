@@ -53,6 +53,7 @@ const MobileChat: React.FC = () => {
 
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSavingConversation, setIsSavingConversation] = useState(false);
   const [archiveAnalysis, setArchiveAnalysis] = useState<any>(null);
 
   // Archive fields
@@ -125,6 +126,32 @@ const MobileChat: React.FC = () => {
     }
   };
 
+  const handleSaveConversation = async () => {
+    if (messages.length === 0 || isStreaming || isSessionArchived) {
+      message.warning('当前无可保存的对话内容');
+      return;
+    }
+    setIsSavingConversation(true);
+    try {
+      const chatHistoryText = messages
+        .filter(m => m.role === 'user' || m.role === 'agent')
+        .map(m => `${m.role === 'user' ? '我' : '故事旁白与NPC'}: ${m.content.replace(/\[\[THINKING:[^\]]+\]\]/g, '').trim()}`)
+        .join('\n\n');
+      const res = await appInvoke<{ title: string }>('summarize_text', {
+        request: { text: chatHistoryText }
+      });
+      const generatedTitle = res.title;
+      setSessionTitle(generatedTitle);
+      await saveCurrentSession();
+      message.success('对话已保存');
+    } catch (err) {
+      console.error('保存对话失败:', err);
+      message.error(`保存对话失败：${String(err)}`);
+    } finally {
+      setIsSavingConversation(false);
+    }
+  };
+
   const handleSelectSession = async (id: string) => {
     if (isStreaming) {
       message.warning('请先停止当前对话生成');
@@ -193,25 +220,6 @@ const MobileChat: React.FC = () => {
     setMessages(nextMessages);
     setInput('');
     setIsStreaming(true);
-
-    const isFirstMsg = !messages.some(m => m.role === 'user');
-    if (isFirstMsg) {
-      const fallbackTitle = trimmed.length > 15 ? `${trimmed.slice(0, 15)}...` : trimmed;
-      setSessionTitle(fallbackTitle);
-      await saveCurrentSession(nextMessages);
-
-      // Background title summarization
-      appInvoke<{ title: string }>('summarize_text', {
-        request: { text: trimmed }
-      }).then(async (res) => {
-        const generatedTitle = res.title;
-        setSessionTitle(generatedTitle);
-        await appInvoke('update_agent_session_title', { id: sessionId, title: generatedTitle });
-        await saveCurrentSession();
-      }).catch((e) => {
-        console.error('生成伴侣会话标题失败:', e);
-      });
-    }
 
     // Compile Prompt
     const selectedCharacterCard = characterCards.find(cc => cc.id === selectedCharacterCardId);
@@ -333,7 +341,6 @@ const MobileChat: React.FC = () => {
             currentThinkingIdRef.current = null;
             setIsStreaming(false);
             setActiveRun({ runId: null, messageId: null });
-            saveCurrentSession();
           }
         },
         (err) => {
@@ -361,7 +368,6 @@ const MobileChat: React.FC = () => {
       setIsStreaming(false);
       setActiveRun({ runId: null, messageId: null });
       message.success('已中止生成');
-      saveCurrentSession();
     } catch (e) {
       console.error('停止生成失败:', e);
     }
@@ -518,7 +524,6 @@ const MobileChat: React.FC = () => {
                   key={card.id}
                   onClick={() => {
                     setSelectedCharacterCardId(card.id);
-                    saveCurrentSession();
                   }}
                   style={{
                     backgroundColor: '#fff',
@@ -562,7 +567,6 @@ const MobileChat: React.FC = () => {
                 value={selectedWorldBookId}
                 onChange={(id) => {
                   setSelectedWorldBookId(id);
-                  saveCurrentSession();
                 }}
                 style={{ width: '120px', fontSize: '16px' }}
                 placeholder="世界书背景..."
@@ -741,14 +745,26 @@ const MobileChat: React.FC = () => {
 
               {/* Archive Trigger Button */}
               {messages.length > 0 && !isSessionArchived && !isStreaming && (
-                <Button
-                  type="link"
-                  icon={<SaveOutlined />}
-                  onClick={handleStartArchive}
-                  style={{ color: '#d97757', padding: 0, fontSize: '13px', alignSelf: 'flex-end' }}
-                >
-                  封存记忆并归档会话
-                </Button>
+                <div style={{ display: 'flex', gap: '12px', alignSelf: 'flex-end' }}>
+                  <Button
+                    type="link"
+                    loading={isSavingConversation}
+                    disabled={isSavingConversation}
+                    icon={<SaveOutlined />}
+                    onClick={() => void handleSaveConversation()}
+                    style={{ color: '#d97757', padding: 0, fontSize: '13px' }}
+                  >
+                    保存对话
+                  </Button>
+                  <Button
+                    type="link"
+                    icon={<SaveOutlined />}
+                    onClick={handleStartArchive}
+                    style={{ color: '#d97757', padding: 0, fontSize: '13px' }}
+                  >
+                    封存记忆并归档会话
+                  </Button>
+                </div>
               )}
               {isSessionArchived && (
                 <div style={{ fontSize: '11px', color: '#8c8880', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '4px', alignItems: 'center' }}>

@@ -47,6 +47,12 @@ export interface SettingsState {
   backgroundCharacterCardPrompt: string;
   storyAgentPrompt: string;
   storyDynamicAgentPrompt: string;
+  bookTravelMaterialAssemblerPrompt: string;
+  bookTravelEntryDirectorPrompt: string;
+  bookTravelPlotPlannerPrompt: string;
+  bookTravelSceneWriterPrompt: string;
+  bookTravelMemoryKeeperPrompt: string;
+  bookTravelEndingJudgePrompt: string;
   chatArchivePrompt: string;
   storyArchivePrompt: string;
 
@@ -86,6 +92,18 @@ export interface SettingsState {
   resetStoryAgentPrompt: () => void;
   setStoryDynamicAgentPrompt: (prompt: string) => void;
   resetStoryDynamicAgentPrompt: () => void;
+  setBookTravelMaterialAssemblerPrompt: (prompt: string) => void;
+  resetBookTravelMaterialAssemblerPrompt: () => void;
+  setBookTravelEntryDirectorPrompt: (prompt: string) => void;
+  resetBookTravelEntryDirectorPrompt: () => void;
+  setBookTravelPlotPlannerPrompt: (prompt: string) => void;
+  resetBookTravelPlotPlannerPrompt: () => void;
+  setBookTravelSceneWriterPrompt: (prompt: string) => void;
+  resetBookTravelSceneWriterPrompt: () => void;
+  setBookTravelMemoryKeeperPrompt: (prompt: string) => void;
+  resetBookTravelMemoryKeeperPrompt: () => void;
+  setBookTravelEndingJudgePrompt: (prompt: string) => void;
+  resetBookTravelEndingJudgePrompt: () => void;
   setChatArchivePrompt: (prompt: string) => void;
   resetChatArchivePrompt: () => void;
   setStoryArchivePrompt: (prompt: string) => void;
@@ -591,6 +609,104 @@ export const defaultStoryDynamicAgentPrompt = `你将在此扮演文字冒险中
 7. **适应输入模式**：用户输入可能是说话、行为或剧情推进。你要理解其语义，顺着它推进故事。
 8. **保持沉浸**：严禁提及“我是AI模型”“正在调用工具”“系统提示词”“这是一场游戏”等出戏表达。`;
 
+export const defaultBookTravelMaterialAssemblerPrompt = `你是穿书素材装配师。你负责读取用户选中的大纲、世界书和角色卡，把它们整理成可运行的穿书世界模型。
+
+## 输出要求
+- 只输出 JSON，不要输出 Markdown 代码块。
+- 保留原始时间线、核心冲突、可能结局、世界规则、重要地点、势力关系、角色画像、关系暗线和隐藏信息边界。
+- 只能整理和归纳素材，不得改写、覆盖或再生成世界书与角色卡。
+- 必须用中文字段内容，结构清晰，便于程序保存。
+- 所有 JSON 字符串值中不得包含未转义的 ASCII 双引号（\"）。如需引述，请使用中文引号「」和『』，或单引号。
+
+## 输出格式
+输出严格 JSON，顶级字段为 assembledWorldModel、stableMemory、volatileMemory。assembledWorldModel 必须包含 originalTimeline、coreConflicts、possibleEndings、worldRules、importantLocations、activeFactions、selectedCharacterProfiles、relationshipHints、hiddenInformationBoundaries。
+
+示例：
+{
+  "assembledWorldModel": {
+    "originalTimeline": ["事件1", "事件2", "事件3"],
+    "coreConflicts": ["冲突1", "冲突2"],
+    "possibleEndings": ["结局A", "结局B"],
+    "worldRules": ["规则1", "规则2"],
+    "importantLocations": ["地点A", "地点B"],
+    "activeFactions": ["势力甲", "势力乙"],
+    "selectedCharacterProfiles": ["角色A：描述", "角色B：描述"],
+    "relationshipHints": ["关系1", "关系2"],
+    "hiddenInformationBoundaries": ["隐藏信息1", "隐藏信息2"]
+  },
+  "stableMemory": {},
+  "volatileMemory": {}
+}`;
+
+export const defaultBookTravelEntryDirectorPrompt = `你是穿书入场导演。你负责基于已装配的世界模型，为用户设计进入小说世界的入口和可扮演身份。
+
+## 输出要求
+- 只输出 JSON，不要输出 Markdown 代码块。
+- 生成 3 到 6 个入场点，每个入场点包含标题、时间位置、入场局势、初始目标和风险。
+- 入场点中必须至少有一个是小说开始时，允许用户从原书第一章或故事开场节点进入。
+- 推荐 3 到 5 个用户身份，包含姓名建议、身份、背景、性格、目标和限制。
+- 所有内容必须贴合选中的世界规则和角色关系。
+- 所有 JSON 字符串值中不得包含未转义的 ASCII 双引号（\"）。如需引述，请使用中文引号「」和『』，或单引号。
+
+## 输出格式
+输出严格 JSON，字段为 entryPoints 与 recommendedUserCharacters。entryPoints 需要 3 到 6 个入口，recommendedUserCharacters 需要 3 到 5 个身份。
+
+示例：
+{
+  "entryPoints": [
+    {
+      "id": "ep-1",
+      "title": "订婚宴前夜",
+      "timeAndLocation": "故事第3天晚上，沈家客厅",
+      "situation": "沈家人逼沈令仪拿钱，气氛紧张",
+      "initialGoal": "保护沈令仪或观察局势",
+      "risk": "直接对抗可能引发家族反弹"
+    }
+  ],
+  "recommendedUserCharacters": [
+    {
+      "name": "林远",
+      "identity": "沈令仪的远房表弟",
+      "background": "刚从国外留学回来，对家族事务不了解",
+      "personality": "冷静理性，善于观察",
+      "goal": "在家族纷争中保护沈令仪"
+    }
+  ]
+}`;
+
+export const defaultBookTravelPlotPlannerPrompt = `你是穿书剧情规划师。你负责判断用户输入意图，并在需要换场时规划状态变化和下一幕目标。
+
+## 输出要求
+- 只输出 JSON，不要输出 Markdown 代码块。
+- 输入分类只能是 meta、insert-beat 或 change-scene。
+- 换场规划必须包含状态变化、偏离度、剧情进度、结局状态、场景目标、入场节拍指引、允许出场角色和写手指令。
+- 可以更新临时记忆，不得修改稳定素材。`;
+
+export const defaultBookTravelSceneWriterPrompt = `你是穿书场景写手。你负责把剧情规划写成可游玩的中文场景和节拍。
+
+## 输出要求
+- 只输出 JSON，不要输出 Markdown 代码块。
+- 场景必须包含标题、摘要、时间、地点、活跃角色、当前情况、节拍和选项。
+- 选项效果只能是 advance-beat 或 change-scene。
+- 叙事要沉浸、有网文画面感，并且不能替用户角色做决定。
+- 你可以提出临时记忆补丁，不得改动稳定素材。`;
+
+export const defaultBookTravelMemoryKeeperPrompt = `你是穿书记忆整理员。你负责把长线穿书游玩记录压缩成可继续使用的摘要记忆。
+
+## 输出要求
+- 只输出 JSON，不要输出 Markdown 代码块。
+- 保留关键选择、状态变化、场景历史、重要互动、人物关系、已知秘密、未解决冲突和对原大纲的偏离。
+- 摘要必须便于后续剧情规划和场景写作继续读取。
+- 不得删除仍然影响当前局势的重要信息。`;
+
+export const defaultBookTravelEndingJudgePrompt = `你是穿书结局裁判。你负责判断穿书故事是否进入结局，并生成最终总结。
+
+## 输出要求
+- 只输出 JSON，不要输出 Markdown 代码块。
+- 判断依据包括核心冲突、剧情进度、用户请求、最大轮次和规划器给出的结局状态。
+- 结局总结必须包含最终结局、用户关键选择、与原大纲差异、角色结局、世界线名称和偏离度评分。
+- 所有面向用户的总结都必须使用中文。`;
+
 export const defaultChatArchivePrompt = `你是一个专门负责伴侣角色记忆管理的AI。你需要基于本次对话记录，以及原有的与用户关系设定（包括关系类型、相处模式、关系底线）和关键事件，来分析两者的改变，并输出本次会话的建议标题。请务必严格按照JSON格式返回。`;
 
 export const defaultStoryArchivePrompt = `你是一个专门负责伴侣角色记忆管理的AI。你需要基于本次冒险记录，以及原有的与用户关系设定（包括关系类型、相处模式、关系底线）和关键事件，来分析两者的改变，并输出本次会话的建议标题。请务必严格按照JSON格式返回。`;
@@ -612,6 +728,12 @@ export const defaultAgentConfigs: Record<string, AgentConfig> = {
   backgroundCharacterCard: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
   storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
   storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
+  bookTravelMaterialAssembler: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
+  bookTravelEntryDirector: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
+  bookTravelPlotPlanner: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
+  bookTravelSceneWriter: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
+  bookTravelMemoryKeeper: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
+  bookTravelEndingJudge: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
   chatArchive: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 128000, thinkingDepth: 'off' },
   storyArchive: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 128000, thinkingDepth: 'off' },
 };
@@ -653,6 +775,12 @@ export const useSettingsStore = create<SettingsState>()(
       backgroundCharacterCardPrompt: defaultBackgroundCharacterCardPrompt,
       storyAgentPrompt: defaultStoryAgentPrompt,
       storyDynamicAgentPrompt: defaultStoryDynamicAgentPrompt,
+      bookTravelMaterialAssemblerPrompt: defaultBookTravelMaterialAssemblerPrompt,
+      bookTravelEntryDirectorPrompt: defaultBookTravelEntryDirectorPrompt,
+      bookTravelPlotPlannerPrompt: defaultBookTravelPlotPlannerPrompt,
+      bookTravelSceneWriterPrompt: defaultBookTravelSceneWriterPrompt,
+      bookTravelMemoryKeeperPrompt: defaultBookTravelMemoryKeeperPrompt,
+      bookTravelEndingJudgePrompt: defaultBookTravelEndingJudgePrompt,
       chatArchivePrompt: defaultChatArchivePrompt,
       storyArchivePrompt: defaultStoryArchivePrompt,
 
@@ -732,6 +860,30 @@ export const useSettingsStore = create<SettingsState>()(
       setStoryDynamicAgentPrompt: (prompt) => set({ storyDynamicAgentPrompt: prompt }),
 
       resetStoryDynamicAgentPrompt: () => set({ storyDynamicAgentPrompt: defaultStoryDynamicAgentPrompt }),
+
+      setBookTravelMaterialAssemblerPrompt: (prompt) => set({ bookTravelMaterialAssemblerPrompt: prompt }),
+
+      resetBookTravelMaterialAssemblerPrompt: () => set({ bookTravelMaterialAssemblerPrompt: defaultBookTravelMaterialAssemblerPrompt }),
+
+      setBookTravelEntryDirectorPrompt: (prompt) => set({ bookTravelEntryDirectorPrompt: prompt }),
+
+      resetBookTravelEntryDirectorPrompt: () => set({ bookTravelEntryDirectorPrompt: defaultBookTravelEntryDirectorPrompt }),
+
+      setBookTravelPlotPlannerPrompt: (prompt) => set({ bookTravelPlotPlannerPrompt: prompt }),
+
+      resetBookTravelPlotPlannerPrompt: () => set({ bookTravelPlotPlannerPrompt: defaultBookTravelPlotPlannerPrompt }),
+
+      setBookTravelSceneWriterPrompt: (prompt) => set({ bookTravelSceneWriterPrompt: prompt }),
+
+      resetBookTravelSceneWriterPrompt: () => set({ bookTravelSceneWriterPrompt: defaultBookTravelSceneWriterPrompt }),
+
+      setBookTravelMemoryKeeperPrompt: (prompt) => set({ bookTravelMemoryKeeperPrompt: prompt }),
+
+      resetBookTravelMemoryKeeperPrompt: () => set({ bookTravelMemoryKeeperPrompt: defaultBookTravelMemoryKeeperPrompt }),
+
+      setBookTravelEndingJudgePrompt: (prompt) => set({ bookTravelEndingJudgePrompt: prompt }),
+
+      resetBookTravelEndingJudgePrompt: () => set({ bookTravelEndingJudgePrompt: defaultBookTravelEndingJudgePrompt }),
 
       setChatArchivePrompt: (prompt) => set({ chatArchivePrompt: prompt }),
 
@@ -823,7 +975,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'museai-settings-storage',
       storage: createJSONStorage(() => createDiskStorage('settings-store', 'museai-settings-storage')),
-      version: 15,
+      version: 16,
       partialize: (state) => {
         const { worksDirectory: _, ...rest } = state;
         return rest as SettingsState;
@@ -847,6 +999,12 @@ export const useSettingsStore = create<SettingsState>()(
           backgroundCharacterCard: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          bookTravelMaterialAssembler: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          bookTravelEntryDirector: { temperature: 0.6, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          bookTravelPlotPlanner: { temperature: 0.2, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          bookTravelSceneWriter: { temperature: 0.8, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          bookTravelMemoryKeeper: { temperature: 0.2, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          bookTravelEndingJudge: { temperature: 0.3, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           chatArchive: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           storyArchive: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 128000, thinkingDepth: 'off' as const },
         };
@@ -932,6 +1090,24 @@ export const useSettingsStore = create<SettingsState>()(
           storyDynamicAgentPrompt: !state.storyDynamicAgentPrompt
             ? defaultStoryDynamicAgentPrompt
             : state.storyDynamicAgentPrompt,
+          bookTravelMaterialAssemblerPrompt: !state.bookTravelMaterialAssemblerPrompt
+            ? defaultBookTravelMaterialAssemblerPrompt
+            : state.bookTravelMaterialAssemblerPrompt,
+          bookTravelEntryDirectorPrompt: !state.bookTravelEntryDirectorPrompt
+            ? defaultBookTravelEntryDirectorPrompt
+            : state.bookTravelEntryDirectorPrompt,
+          bookTravelPlotPlannerPrompt: !state.bookTravelPlotPlannerPrompt
+            ? defaultBookTravelPlotPlannerPrompt
+            : state.bookTravelPlotPlannerPrompt,
+          bookTravelSceneWriterPrompt: !state.bookTravelSceneWriterPrompt
+            ? defaultBookTravelSceneWriterPrompt
+            : state.bookTravelSceneWriterPrompt,
+          bookTravelMemoryKeeperPrompt: !state.bookTravelMemoryKeeperPrompt
+            ? defaultBookTravelMemoryKeeperPrompt
+            : state.bookTravelMemoryKeeperPrompt,
+          bookTravelEndingJudgePrompt: !state.bookTravelEndingJudgePrompt
+            ? defaultBookTravelEndingJudgePrompt
+            : state.bookTravelEndingJudgePrompt,
           chatArchivePrompt: !state.chatArchivePrompt
             ? defaultChatArchivePrompt
             : state.chatArchivePrompt,

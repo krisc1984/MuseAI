@@ -1,32 +1,39 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox } from 'antd';
+import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox, Switch } from 'antd';
 import {
+  BulbOutlined,
   HistoryOutlined,
   ReloadOutlined,
   CompassOutlined,
   StopOutlined,
   PlayCircleOutlined,
+  InfoCircleOutlined,
   DeleteOutlined,
   UserOutlined,
   FileProtectOutlined,
+  SaveOutlined,
   CommentOutlined,
   ExperimentOutlined,
-  BranchesOutlined
+  BranchesOutlined,
+  RedoOutlined,
+  EditOutlined
 } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
-import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
-
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
-import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { useBookTravelStore } from '../stores/useBookTravelStore';
+
+import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
 import {
   buildStoryModelMessages,
   compileStorySystemPrompt,
+  getRolePlayCharacterName,
   getStoryAllowedTools,
 } from './storyAgent';
 import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
@@ -56,68 +63,14 @@ const estimateContextUsage = (systemPrompt: string, messages: Message[], draft: 
 };
 
 
-const cleanAndParseJSON = (rawStr: string): any => {
-  let cleaned = rawStr.trim();
-  if (cleaned.startsWith('`')) {
-    const lines = cleaned.split('\n');
-    if (lines[0].startsWith('`')) lines.shift();
-    if (lines[lines.length - 1]?.trim() === '`') lines.pop();
-    cleaned = lines.join('\n').trim();
-  }
-  const firstBrace = cleaned.indexOf('{');
-  const firstBracket = cleaned.indexOf('[');
-  let startIdx = -1;
-  let isObject = true;
-  if (firstBrace !== -1 && firstBracket !== -1) {
-    if (firstBrace < firstBracket) {
-      startIdx = firstBrace;
-      isObject = true;
-    } else {
-      startIdx = firstBracket;
-      isObject = false;
-    }
-  } else if (firstBrace !== -1) {
-    startIdx = firstBrace;
-    isObject = true;
-  } else if (firstBracket !== -1) {
-    startIdx = firstBracket;
-    isObject = false;
-  }
-  if (startIdx === -1) {
-    throw new Error('No JSON object or array found in response');
-  }
-  let endIdx = cleaned.length;
-  if (isObject) {
-    let braceCount = 0;
-    for (let i = startIdx; i < cleaned.length; i++) {
-      if (cleaned[i] === '{') braceCount++;
-      if (cleaned[i] === '}') braceCount--;
-      if (braceCount === 0) {
-        endIdx = i + 1;
-        break;
-      }
-    }
-  } else {
-    let bracketCount = 0;
-    for (let i = startIdx; i < cleaned.length; i++) {
-      if (cleaned[i] === '[') bracketCount++;
-      if (cleaned[i] === ']') bracketCount--;
-      if (bracketCount === 0) {
-        endIdx = i + 1;
-        break;
-      }
-    }
-  }
-  const jsonStr = cleaned.slice(startIdx, endIdx);
-  return JSON.parse(jsonStr);
-};
 
-const Story: React.FC = () => {
+const Adventure: React.FC = () => {
   const {
     messages, setMessages,
     input, setInput,
     inputMode, setInputMode,
     isStreaming, setIsStreaming,
+    expandedBlocks, setExpandedBlocks,
     selectedWorldBookId, setSelectedWorldBookId,
     selectedCharacterCardIds, setSelectedCharacterCardIds,
     sessions, setSessions,
@@ -125,97 +78,14 @@ const Story: React.FC = () => {
     sessionTitle, setSessionTitle,
     activeRun, setActiveRun,
     isSessionArchived, setIsSessionArchived,
+    initialPlot, setInitialPlot,
     contextCompaction, setContextCompaction,
     dynamicRoleLoadingEnabled, setDynamicRoleLoadingEnabled,
     createNewSession
   } = useStoryStore();
 
-  const bookTravelStore = useBookTravelStore();
-  const navigate = useNavigate();
+  const { worldBooks, characterCards, updateItemFields, selectItem } = usePartnerStore();
 
-  // Book-travel stream states
-  const [, setIsTransitioningScene] = useState(false);
-  const [startProgressOpen, setStartProgressOpen] = useState(false);
-  const [startProgressPhase, setStartProgressPhase] = useState<'planner' | 'writer' | 'done' | 'error' | 'cancelled'>('planner');
-  const [, setPlannerOutput] = useState('');
-  const [, setWriterOutput] = useState('');
-  const [startProgressError, setStartProgressError] = useState('');
-  const [startElapsedMs, setStartElapsedMs] = useState(0);
-  const startRunIdRef = useRef<string | null>(null);
-  const startResolverRef = useRef<{ resolve: (content: string) => void; reject: (error: string) => void } | null>(null);
-  const startCancelledRef = useRef(false);
-
-  const formatElapsed = (ms: number) => {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  };
-
-  const buildBookTravelRequest = (
-    role: string,
-    systemPrompt: string,
-    config: {
-      temperature?: number;
-      maxOutputTokens?: number;
-      maxContextTokens?: number;
-      thinkingDepth?: string;
-    },
-    materials: {
-      outline: { id: string; title: string; content?: string };
-      worldBook: { id: string; title: string; content?: string };
-      characterCards: Array<{ id: string; title: string; content?: string }>;
-    },
-    state: unknown,
-    previousValidState: unknown = {},
-  ) => ({
-    modelInterface: settings.modelInterface,
-    baseUrl: settings.llmBaseUrl,
-    apiKey: settings.llmApiKey,
-    model: settings.llmModel,
-    role,
-    materials,
-    state,
-    previousValidState,
-    temperature: config.temperature,
-    maxOutputTokens: config.maxOutputTokens,
-    maxContextTokens: config.maxContextTokens,
-    thinkingDepth: 'off',
-    systemPrompt,
-  });
-
-  const runBookTravelStreamTask = async (commandName: string, request: any, extraArgs?: Record<string, unknown>) => {
-    return new Promise<string>((resolve, reject) => {
-      if (startCancelledRef.current) {
-        reject('用户中断');
-        return;
-      }
-      startResolverRef.current = { resolve, reject };
-      invoke<{ runId: string }>(commandName, { request, ...extraArgs })
-        .then((result) => {
-          startRunIdRef.current = result.runId;
-        })
-        .catch((err) => {
-          reject(String(err));
-        });
-    });
-  };
-
-  const handleCancelStart = async () => {
-    startCancelledRef.current = true;
-    startResolverRef.current?.reject('用户中断');
-    if (startRunIdRef.current) {
-      try {
-        await invoke('stop_book_travel_stream', { runId: startRunIdRef.current });
-      } catch (e) {
-        console.error('停止穿书流失败:', e);
-      }
-    }
-    setStartProgressPhase('cancelled');
-  };
-
-
-  const { worldBooks, characterCards, updateItemFields } = usePartnerStore();
   const { userInfo: partnerChatUserInfo } = usePartnerChatStore();
   const settings = useSettingsStore();
 
@@ -232,6 +102,7 @@ const Story: React.FC = () => {
 
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSavingConversation, setIsSavingConversation] = useState(false);
   const [archiveAnalyses, setArchiveAnalyses] = useState<Record<string, any>>({});
   const [selectedTargetCardId, setSelectedTargetCardId] = useState<string>('');
 
@@ -241,9 +112,12 @@ const Story: React.FC = () => {
   const [editedRelationBottomLines, setEditedRelationBottomLines] = useState<Record<string, string>>({});
   const [editedEventsMap, setEditedEventsMap] = useState<Record<string, string>>({});
 
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState('');
 
   const [tempSelectedCardIds, setTempSelectedCardIds] = useState<string[]>([]);
   const [hasStartedAnalysis, setHasStartedAnalysis] = useState(false);
+
 
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -380,9 +254,6 @@ const Story: React.FC = () => {
         activeRunRef.current = { runId: null, messageId: null };
         setActiveRun({ runId: null, messageId: null });
         setIsStreaming(false);
-        window.setTimeout(() => {
-          void saveCurrentSession();
-        }, 0);
       }
     }).then((fn) => {
       unlistenFn = fn;
@@ -394,36 +265,6 @@ const Story: React.FC = () => {
       if (unlistenFn) unlistenFn();
     };
   }, []);
-
-  // Listen to book-travel stream events
-  useEffect(() => {
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    listen<any>('book-travel-stream', (event) => {
-      if (!active) return;
-      const { runId, eventType, delta, message: eventMessage } = event.payload;
-      if (startRunIdRef.current && runId !== startRunIdRef.current) return;
-      if (eventType === 'delta' && delta) {
-        if (startProgressPhase === 'planner') {
-          setPlannerOutput((prev) => prev + delta);
-        } else if (startProgressPhase === 'writer') {
-          setWriterOutput((prev) => prev + delta);
-        }
-      }
-      if (eventType === 'done') {
-        startResolverRef.current?.resolve(eventMessage || '');
-      }
-      if (eventType === 'error') {
-        startResolverRef.current?.reject(eventMessage || '未知错误');
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      active = false;
-      if (unlisten) unlisten();
-    };
-  }, [startProgressPhase]);
 
   const scrollToBottomOnce = () => {
     window.requestAnimationFrame(() => {
@@ -472,280 +313,92 @@ const Story: React.FC = () => {
     thinkingDepth: 'off',
   };
 
+  const startAdventure = async () => {
+    if (!selectedWorldBookId || !initialPlot.trim()) {
+      message.warning('请先选择世界书并输入初始剧情设定！');
+      return;
+    }
 
-  const mergeNewBeatIntoCurrentScene = (updatedScene: any) => {
-    const currentScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
-    if (!currentScene) return;
-    const currentBeatIds = new Set(currentScene.beats.map((b) => b.id));
-    const newBeats = (updatedScene.beats || []).filter((b: any) => !currentBeatIds.has(b.id));
-    if (newBeats.length > 0) {
-      const newBeat = newBeats[newBeats.length - 1];
-      bookTravelStore.addBeatToCurrentScene({
-        id: newBeat.id || `beat-${Date.now()}`,
-        content: newBeat.content || '',
-        choices: [],
+    // Reset book-travel state to ensure page isolation
+    useBookTravelStore.getState().resetSession();
+
+    const formattedPlot = initialPlot.trim();
+    const userMessage: Message = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: formattedPlot,
+      tools: []
+    };
+    const agentMessageId = `msg-${Date.now() + 1}`;
+    const pendingAgentMessage: Message = {
+      id: agentMessageId,
+      role: 'agent',
+      content: '',
+      tools: []
+    };
+
+    const nextMessages = [userMessage, pendingAgentMessage];
+    contextCompactionRef.current = null;
+    setContextCompaction(null);
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+
+    // Initial fallback title
+    const fallbackTitle = formattedPlot.length > 15 ? `${formattedPlot.slice(0, 15)}...` : formattedPlot;
+    sessionTitleRef.current = fallbackTitle;
+    setSessionTitle(fallbackTitle);
+    setIsStreaming(true);
+
+    // Try background title summary
+    invoke<string>('summarize_text', {
+      request: {
+        modelInterface: settings.modelInterface,
+        baseUrl: settings.llmBaseUrl,
+        apiKey: settings.llmApiKey,
+        model: settings.llmModel,
+        temperature: storyAgentConfig.temperature ?? 0.3,
+        maxOutputTokens: 64,
+        text: formattedPlot,
+      },
+    }).then(async (generatedTitle) => {
+      sessionTitleRef.current = generatedTitle;
+      setSessionTitle(generatedTitle);
+    }).catch((e) => {
+      console.error('生成冒险标题失败:', e);
+    });
+
+    try {
+      const runId = await invoke<string>('start_chat_completion_stream', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: storyAgentConfig.temperature ?? 0.3,
+          maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 32000,
+          maxContextTokens: storyAgentConfig.maxContextTokens ?? 200000,
+          thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
+          systemPrompt: effectiveSystemPrompt,
+          workspacePath: null,
+          messages: [{ id: userMessage.id, role: 'user', content: formattedPlot }],
+          contextCompaction: null,
+          selectedReferenceFiles: [],
+          allowedTools: storyAllowedTools,
+          rolePlayContext,
+        }
       });
-      bookTravelStore.setCurrentBeatId(newBeat.id || `beat-${Date.now()}`);
-    }
-    const patch = updatedScene.volatileMemoryPatch || updatedScene.volatile_memory_patch;
-    if (patch && typeof patch === 'object') {
-      bookTravelStore.updateVolatileMemory(patch);
-    }
-  };
 
-  const handleMetaCommand = async (userInput: string) => {
-    const lower = userInput.toLowerCase();
-    if (['存档', '保存', 'save'].some((t) => lower.includes(t))) {
-      try {
-        await saveCurrentSession();
-        message.success('已存档');
-      } catch (e) {
-        message.error(`存档失败：${String(e)}`);
-      }
-      return;
-    }
-    if (['查看状态', '我的状态', '状态', '背包', '当前情况'].some((t) => lower.includes(t))) {
-      Modal.info({
-        title: '当前状态',
-        width: 520,
-        content: (
-          <div style={{ lineHeight: 1.8, color: '#33312e' }}>
-            {bookTravelStore.userCharacter && (
-              <div>
-                <strong>扮演身份：</strong>
-                {bookTravelStore.userCharacter.name}（{bookTravelStore.userCharacter.identity}）
-                <br /><strong>目标：</strong>{bookTravelStore.userCharacter.goal}
-              </div>
-            )}
-            <div style={{ marginTop: 8 }}>
-              <strong>时间：</strong>{String((bookTravelStore.currentState as any)?.time || bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId)?.time || '未知')}
-              <br /><strong>地点：</strong>{String((bookTravelStore.currentState as any)?.location || bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId)?.location || '未知')}
-            </div>
-            {bookTravelStore.volatileMemory && (
-              <div style={{ marginTop: 8 }}>
-                {Object.entries(bookTravelStore.volatileMemory).map(([k, v]) => (
-                  <div key={k}><strong>{k}：</strong>{String(v)}</div>
-                ))}
-              </div>
-            )}
-          </div>
-        ),
-      });
-      return;
-    }
-    message.info('元指令已接收');
-  };
-
-  const handleInsertBeatStream = async (userInput: string) => {
-    setIsTransitioningScene(true);
-    setStartProgressOpen(true);
-    setStartProgressPhase('writer');
-    setPlannerOutput('');
-    setWriterOutput('');
-    setStartProgressError('');
-    setStartElapsedMs(0);
-    startCancelledRef.current = false;
-    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
-    try {
-      elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
-      const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns } = bookTravelStore;
-      if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
-      const materials = {
-        outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
-        worldBook: { id: selectedWorldBook.id, title: selectedWorldBook.title, content: selectedWorldBook.content },
-        characterCards: selectedCharacterCards.map((cc: any) => ({ id: cc.id, title: cc.title, content: cc.content })),
-      };
-      const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
-      const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: bookTravelStore.currentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: scenes.slice(-3), recentTurns: turns.slice(-5), writerInstructions: userInput };
-      const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
-      const currentScene = scenes.find((s) => s.id === bookTravelStore.currentSceneId);
-      const allowedSpeakers = currentScene?.activeCharacters || [];
-      const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_insert_beat_stream', writerRequest, { userInput, allowedSpeakers });
-      let scene = cleanAndParseJSON(sceneJsonStr);
-      mergeNewBeatIntoCurrentScene(scene);
-      const newBeat = scene.beats?.[scene.beats.length - 1];
-      bookTravelStore.appendTurn({ id: `turn-${Date.now()}`, userInput, classification: 'insert-beat' as const, narrativeOutput: newBeat?.content || '', stateSnapshot: bookTravelStore.currentState, createdBeatIds: [newBeat?.id || ''] });
-      setStartProgressPhase('done');
-    } catch (err: any) {
-      if (startCancelledRef.current) { message.info('已中断'); setStartProgressPhase('cancelled'); }
-      else { const errorMsg = String(err); message.error(`生成失败：${errorMsg}`); setStartProgressError(errorMsg); setStartProgressPhase('error'); }
-    } finally {
-      if (elapsedInterval) clearInterval(elapsedInterval);
-      setIsTransitioningScene(false);
-      startRunIdRef.current = null;
-      startResolverRef.current = null;
-    }
-  };
-
-  const handleChangeSceneStream = async (userInput: string) => {
-    setIsTransitioningScene(true);
-    setStartProgressOpen(true);
-    setStartProgressPhase('planner');
-    setPlannerOutput('');
-    setWriterOutput('');
-    setStartProgressError('');
-    setStartElapsedMs(0);
-    startCancelledRef.current = false;
-    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
-    try {
-      elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
-      const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns, userCharacter } = bookTravelStore;
-      if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
-      const materials = {
-        outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
-        worldBook: { id: selectedWorldBook.id, title: selectedWorldBook.title, content: selectedWorldBook.content },
-        characterCards: selectedCharacterCards.map((cc: any) => ({ id: cc.id, title: cc.title, content: cc.content })),
-      };
-      const plannerConfig = settings.agentConfigs?.bookTravelScenePlanner || {};
-      const plannerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: bookTravelStore.currentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: scenes.slice(-3), recentTurns: turns.slice(-5), userCharacter };
-      const plannerRequest = buildBookTravelRequest('scene-planner', settings.bookTravelPlotPlannerPrompt, plannerConfig, materials, plannerState);
-      const plannerPlanStr = await runBookTravelStreamTask('start_plan_book_travel_scene_stream', plannerRequest, { userInput });
-      let plan = cleanAndParseJSON(plannerPlanStr);
-      const newCurrentState = { ...(bookTravelStore.currentState || {}), ...(plan.stateChanges || plan.state_changes || {}) };
-      bookTravelStore.setCurrentState(newCurrentState);
-      setStartProgressPhase('writer');
-      const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
-      const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: scenes.slice(-3), recentTurns: turns.slice(-5), writerInstructions: plan.writerInstructions || plan.writer_instructions || '' };
-      const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
-      const allowedCast = plan.allowedCast || plan.allowed_cast || [];
-      const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_change_scene_stream', writerRequest, { userInput: plan.writerInstructions || plan.writer_instructions || '', allowedSpeakers: allowedCast });
-      let scene = cleanAndParseJSON(sceneJsonStr);
-      const patch = scene.volatileMemoryPatch || scene.volatile_memory_patch;
-      if (patch && typeof patch === 'object') bookTravelStore.updateVolatileMemory(patch);
-      const repairedScene = {
-        id: scene.id || `scene-${Date.now()}`,
-        title: scene.title || `新场景-${scenes.length + 1}`,
-        summary: scene.summary || '',
-        currentSituation: scene.currentSituation || '',
-        time: scene.time || newCurrentState.time || '',
-        location: scene.location || newCurrentState.location || '',
-        activeCharacters: scene.activeCharacters || allowedCast,
-        beats: (scene.beats || []).map((beat: any, idx: number) => ({ id: beat.id || `beat-${idx + 1}`, content: beat.content || '', choices: [] })),
-      };
-      bookTravelStore.addScene(repairedScene);
-      const newTurn = { id: `turn-${Date.now()}`, userInput, classification: 'change-scene' as const, plannerOutput: plan, narrativeOutput: repairedScene.beats[0]?.content || '', stateSnapshot: newCurrentState, createdSceneId: repairedScene.id, createdBeatIds: repairedScene.beats.map((b: any) => b.id) };
-      bookTravelStore.appendTurn(newTurn);
-      if (plan.endingStatus && plan.endingStatus !== 'none' && plan.endingStatus !== 'active') {
-        const judgeConfig = settings.agentConfigs?.bookTravelEndingJudge || {};
-        const judgeState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: [...scenes.slice(-3), repairedScene], recentTurns: [...turns.slice(-5), newTurn] };
-        const judgeRequest = buildBookTravelRequest('ending-judge', settings.bookTravelEndingJudgePrompt, judgeConfig, materials, judgeState);
-        const endingJsonStr = await invoke<string>('judge_book_travel_ending', { request: judgeRequest });
-        let ending = cleanAndParseJSON(endingJsonStr);
-        bookTravelStore.finishSession(ending);
-        message.success('已达成穿书结局！');
-      } else {
-        const keeperConfig = settings.agentConfigs?.bookTravelMemoryKeeper || {};
-        const keeperState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: [...scenes.slice(-3), repairedScene], recentTurns: [...turns.slice(-5), newTurn] };
-        const keeperRequest = buildBookTravelRequest('memory-keeper', settings.bookTravelMemoryKeeperPrompt, keeperConfig, materials, keeperState);
-        invoke<string>('summarize_book_travel_memory', { request: keeperRequest }).then((resStr) => {
-          try { const res = cleanAndParseJSON(resStr); if (res.summary) bookTravelStore.updateSummaryMemory(res.summary); }
-          catch (e) { console.error('Failed to parse memory keeper summary:', e); }
-        }).catch((err) => { console.error('Failed to update memory keeper:', err); });
-      }
-      setStartProgressPhase('done');
-      message.success('已切换至新场景！');
-    } catch (err: any) {
-      if (startCancelledRef.current) { message.info('已中断'); setStartProgressPhase('cancelled'); }
-      else { const errorMsg = String(err); message.error(`切换场景失败：${errorMsg}`); setStartProgressError(errorMsg); setStartProgressPhase('error'); }
-    } finally {
-      if (elapsedInterval) clearInterval(elapsedInterval);
-      setIsTransitioningScene(false);
-      startRunIdRef.current = null;
-      startResolverRef.current = null;
-    }
-  };
-
-  const startBookTravelAdventure = async () => {
-    const { selectedEntryPointId, userCharacter, assembledWorldModel, stableMemory, volatileMemory, selectedOutline, selectedWorldBook, selectedCharacterCards } = bookTravelStore;
-    if (!selectedEntryPointId) {
-      message.warning('请选择一个入场点');
-      return;
-    }
-    if (!userCharacter || !userCharacter.name.trim()) {
-      message.warning('请选择或填写一个扮演身份');
-      return;
-    }
-    if (!selectedOutline || !selectedWorldBook) {
-      message.warning('素材缺失，请重新装配素材');
-      return;
-    }
-
-    setIsTransitioningScene(true);
-    setStartProgressOpen(true);
-    setStartProgressPhase('planner');
-    setPlannerOutput('');
-    setWriterOutput('');
-    setStartProgressError('');
-    setStartElapsedMs(0);
-    startCancelledRef.current = false;
-
-    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
-    try {
-      elapsedInterval = setInterval(() => setStartElapsedMs((prev) => prev + 100), 100);
-
-      const entryPoint = bookTravelStore.entryPoints.find(ep => ep.id === selectedEntryPointId);
-      if (!entryPoint) throw new Error('选中的入场点不存在');
-
-      const materials = {
-        outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
-        worldBook: { id: selectedWorldBook.id, title: selectedWorldBook.title, content: selectedWorldBook.content },
-        characterCards: selectedCharacterCards.map(cc => ({ id: cc.id, title: cc.title, content: cc.content })),
-      };
-
-      const plannerConfig = settings.agentConfigs?.bookTravelScenePlanner || {};
-      const plannerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: null, summaryMemory: '', recentScenes: [], recentTurns: [], userCharacter, selectedEntryPointId };
-      const plannerRequest = buildBookTravelRequest('scene-planner', settings.bookTravelPlotPlannerPrompt, plannerConfig, materials, plannerState);
-      const plannerInput = `确认以入场点 [${entryPoint.title}] 入场，扮演新身份 [${userCharacter.name}]（${userCharacter.identity}）。\n详细局势：${entryPoint.situation || entryPoint.summary || ''}\n初始目标：${entryPoint.initialGoal || ''}\n面临风险：${entryPoint.risk || ''}`;
-      const plannerPlanStr = await runBookTravelStreamTask('start_plan_book_travel_scene_stream', plannerRequest, { userInput: plannerInput });
-
-      let plan = cleanAndParseJSON(plannerPlanStr);
-      const newCurrentState = { ...(plannerState.currentState || {}), ...(plan.stateChanges || plan.state_changes || {}), time: entryPoint.timeAndLocation || plan.stateChanges?.time || plan.state_changes?.time || '', location: entryPoint.timeAndLocation || plan.stateChanges?.location || plan.state_changes?.location || '' };
-      bookTravelStore.setCurrentState(newCurrentState);
-
-      setStartProgressPhase('writer');
-      const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
-      const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: '', recentScenes: [], recentTurns: [], writerInstructions: plan.writerInstructions || plan.writer_instructions || '' };
-      const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
-      const allowedCast = plan.allowedCast || plan.allowed_cast || [];
-      const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_change_scene_stream', writerRequest, { userInput: plan.writerInstructions || plan.writer_instructions || '', allowedSpeakers: allowedCast });
-
-      let scene = cleanAndParseJSON(sceneJsonStr);
-      const patch = scene.volatileMemoryPatch || scene.volatile_memory_patch;
-      if (patch && typeof patch === 'object') bookTravelStore.updateVolatileMemory(patch);
-
-      const repairedScene = {
-        id: scene.id || `scene-${Date.now()}`,
-        title: scene.title || entryPoint.title,
-        summary: scene.summary || entryPoint.situation || entryPoint.summary,
-        currentSituation: scene.currentSituation || entryPoint.situation,
-        time: scene.time || entryPoint.timeAndLocation,
-        location: scene.location || entryPoint.timeAndLocation,
-        activeCharacters: scene.activeCharacters || allowedCast,
-        beats: (scene.beats || []).map((beat: any, idx: number) => ({ id: beat.id || `beat-${idx + 1}`, content: beat.content || '', choices: [] })),
-      };
-
-      bookTravelStore.addScene(repairedScene);
-      const autoTitle = `${selectedOutline.title}-${entryPoint.title}`;
-      setSessionTitle(autoTitle);
-      sessionTitleRef.current = autoTitle;
-      setStartProgressPhase('done');
-      message.success('穿书冒险已开始！');
-    } catch (err: any) {
-      if (startCancelledRef.current) {
-        message.info('已中断穿书开始');
-        setStartProgressPhase('cancelled');
-      } else {
-        const errorMsg = String(err);
-        message.error(`开始穿书冒险失败：${errorMsg}`);
-        setStartProgressError(errorMsg);
-        setStartProgressPhase('error');
-        console.error(err);
-      }
-    } finally {
-      if (elapsedInterval) clearInterval(elapsedInterval);
-      setIsTransitioningScene(false);
-      startRunIdRef.current = null;
-      startResolverRef.current = null;
+      activeRunRef.current = { runId, messageId: agentMessageId };
+      setActiveRun({ runId, messageId: agentMessageId });
+    } catch (err) {
+      activeRunRef.current = { runId: null, messageId: null };
+      setActiveRun({ runId: null, messageId: null });
+      setIsStreaming(false);
+      setMessages((prev) => prev.map((msg) => (
+        msg.id === agentMessageId
+          ? { ...msg, content: `请求冒险发生故障：${String(err)}` }
+          : msg
+      )));
     }
   };
 
@@ -753,91 +406,71 @@ const Story: React.FC = () => {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
 
-    if (bookTravelStore.scenes.length > 0) {
-      setInput('');
-      try {
-        const { selectedOutline, selectedWorldBook, selectedCharacterCards } = bookTravelStore;
-        if (!selectedOutline || !selectedWorldBook) {
-          message.error('素材缺失，请重新装配素材');
-          return;
-        }
-        const materials = {
-          outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
-          worldBook: { id: selectedWorldBook.id, title: selectedWorldBook.title, content: selectedWorldBook.content },
-          characterCards: selectedCharacterCards.map((cc: any) => ({ id: cc.id, title: cc.title, content: cc.content })),
-        };
-        const classifierConfig = settings.agentConfigs?.bookTravelInputClassifier || {};
-        const classifierState = {
-          stableMemory: bookTravelStore.stableMemory,
-          volatileMemory: bookTravelStore.volatileMemory,
-          assembledWorldModel: bookTravelStore.assembledWorldModel,
-          currentState: bookTravelStore.currentState,
-          summaryMemory: bookTravelStore.summaryMemory || '',
-          recentScenes: bookTravelStore.scenes.slice(-3),
-          recentTurns: bookTravelStore.turns.slice(-5),
-          userCharacter: bookTravelStore.userCharacter,
-        };
-        const classifierRequest = buildBookTravelRequest(
-          'input-classifier',
-          '你是一个穿书输入分类器。根据用户的输入，判断其意图是以下哪一种：\n- meta: 元指令（如查看状态、存档、回顾剧情等）\n- insert-beat: 在当前场景中继续互动（对话、观察、小动作）\n- change-scene: 切换场景（离开地点、跳过时间、重大决定）\n只输出分类结果，不要解释。',
-          classifierConfig,
-          materials,
-          classifierState,
-        );
-        const classificationResult = await invoke<{ classification: 'meta' | 'insert-beat' | 'change-scene' }>('classify_book_travel_input', {
-          request: classifierRequest,
-          userInput: trimmed,
-        });
-        switch (classificationResult.classification) {
-          case 'meta': await handleMetaCommand(trimmed); break;
-          case 'insert-beat': await handleInsertBeatStream(trimmed); break;
-          case 'change-scene': await handleChangeSceneStream(trimmed); break;
-          default: message.warning('无法识别输入意图，请重新输入');
-        }
-      } catch (err) {
-        message.error(`处理失败：${String(err)}`);
-      }
-      return;
-    }
-
+    // Apply input format rules based on mode
     let formattedText = trimmed;
     if (inputMode === 'speech') {
-      formattedText = `我："${trimmed}"`;
+      formattedText = `我：“${trimmed}”`;
     } else if (inputMode === 'behavior') {
       formattedText = `（我 ${trimmed}）`;
     } else if (inputMode === 'plot') {
       formattedText = `[剧情推进] ${trimmed}`;
     }
-    const userMessage: Message = { id: `msg-${Date.now()}`, role: 'user', content: formattedText, tools: [] };
+
+    const userMessage: Message = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: formattedText,
+      tools: []
+    };
     const agentMessageId = `msg-${Date.now() + 1}`;
-    const pendingAgentMessage: Message = { id: agentMessageId, role: 'agent', content: '', tools: [] };
+    const pendingAgentMessage: Message = {
+      id: agentMessageId,
+      role: 'agent',
+      content: '',
+      tools: []
+    };
+
     const nextMessages = [...messages, userMessage, pendingAgentMessage];
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
     setInput('');
     setIsStreaming(true);
     scrollToBottomOnce();
+
     try {
       const modelMessages = buildStoryModelMessages(nextMessages.slice(0, -1));
+
       const runId = await invoke<string>('start_chat_completion_stream', {
         request: {
-          modelInterface: settings.modelInterface, baseUrl: settings.llmBaseUrl, apiKey: settings.llmApiKey,
-          model: settings.llmModel, temperature: storyAgentConfig.temperature ?? 0.3,
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: storyAgentConfig.temperature ?? 0.3,
           maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 32000,
           maxContextTokens: storyAgentConfig.maxContextTokens ?? 200000,
           thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
-          systemPrompt: effectiveSystemPrompt, workspacePath: null, messages: modelMessages,
-          contextCompaction: contextCompactionRef.current, selectedReferenceFiles: [],
-          allowedTools: storyAllowedTools, rolePlayContext,
+          systemPrompt: effectiveSystemPrompt,
+          workspacePath: null,
+          messages: modelMessages,
+          contextCompaction: contextCompactionRef.current,
+          selectedReferenceFiles: [],
+          allowedTools: storyAllowedTools,
+          rolePlayContext,
         }
       });
+
       activeRunRef.current = { runId, messageId: agentMessageId };
       setActiveRun({ runId, messageId: agentMessageId });
     } catch (err) {
       activeRunRef.current = { runId: null, messageId: null };
       setActiveRun({ runId: null, messageId: null });
       setIsStreaming(false);
-      setMessages((prev) => prev.map((msg) => msg.id === agentMessageId ? { ...msg, content: `请求冒险发生故障：${String(err)}` } : msg));
+      setMessages((prev) => prev.map((msg) => (
+        msg.id === agentMessageId
+          ? { ...msg, content: `请求冒险发生故障：${String(err)}` }
+          : msg
+      )));
     }
   };
 
@@ -852,9 +485,155 @@ const Story: React.FC = () => {
     setIsStreaming(false);
   };
 
+  const handleStartEdit = (msg: Message) => {
+    setEditingMessageId(msg.id);
+    setEditingContent(msg.content);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingContent('');
+  };
+
+  const handleSaveEdit = async (msg: Message) => {
+    if (!editingContent.trim()) return;
+
+    if (msg.role === 'agent') {
+      const nextMessages = messages.map(m => m.id === msg.id ? { ...m, content: editingContent } : m);
+      setMessages(nextMessages);
+      messagesRef.current = nextMessages;
+      setEditingMessageId(null);
+      setEditingContent('');
+    } else {
+      const userIdx = messages.findIndex(m => m.id === msg.id);
+      if (userIdx === -1) return;
+
+      const baseMessages = messages.slice(0, userIdx + 1);
+      baseMessages[userIdx] = {
+        ...baseMessages[userIdx],
+        content: editingContent
+      };
+
+      const agentMessageId = `msg-${Date.now()}`;
+      const pendingAgentMessage: Message = {
+        id: agentMessageId,
+        role: 'agent',
+        content: '',
+        tools: []
+      };
+
+      const nextMessages = [...baseMessages, pendingAgentMessage];
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+      setEditingMessageId(null);
+      setEditingContent('');
+      setIsStreaming(true);
+      scrollToBottomOnce();
+
+      try {
+        const modelMessages = buildStoryModelMessages(baseMessages);
+
+        const runId = await invoke<string>('start_chat_completion_stream', {
+          request: {
+            modelInterface: settings.modelInterface,
+            baseUrl: settings.llmBaseUrl,
+            apiKey: settings.llmApiKey,
+            model: settings.llmModel,
+            temperature: storyAgentConfig.temperature ?? 0.3,
+            maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 32000,
+            maxContextTokens: storyAgentConfig.maxContextTokens ?? 200000,
+            thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
+            systemPrompt: effectiveSystemPrompt,
+            workspacePath: null,
+            messages: modelMessages,
+            contextCompaction: contextCompactionRef.current,
+            selectedReferenceFiles: [],
+            allowedTools: storyAllowedTools,
+            rolePlayContext,
+          }
+        });
+
+        activeRunRef.current = { runId, messageId: agentMessageId };
+        setActiveRun({ runId, messageId: agentMessageId });
+      } catch (err) {
+        activeRunRef.current = { runId: null, messageId: null };
+        setActiveRun({ runId: null, messageId: null });
+        setIsStreaming(false);
+        setMessages((prev) => prev.map((m) => (
+          m.id === agentMessageId
+            ? { ...m, content: `请求冒险发生故障：${String(err)}` }
+            : m
+        )));
+      }
+    }
+  };
+
+  const handleRegenerateAssistantMessage = async () => {
+    if (isStreaming) return;
+
+    const lastAgentIndex = [...messages].reverse().findIndex(m => m.role === 'agent');
+    const realLastAgentIndex = lastAgentIndex !== -1 ? messages.length - 1 - lastAgentIndex : -1;
+    if (realLastAgentIndex === -1) return;
+
+    const baseMessages = messages.slice(0, realLastAgentIndex);
+    const agentMessageId = messages[realLastAgentIndex].id;
+    const pendingAgentMessage: Message = {
+      id: agentMessageId,
+      role: 'agent',
+      content: '',
+      tools: []
+    };
+
+    const nextMessages = [...baseMessages, pendingAgentMessage];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    setIsStreaming(true);
+    scrollToBottomOnce();
+
+    try {
+      const modelMessages = buildStoryModelMessages(baseMessages);
+
+      const runId = await invoke<string>('start_chat_completion_stream', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: storyAgentConfig.temperature ?? 0.3,
+          maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 32000,
+          maxContextTokens: storyAgentConfig.maxContextTokens ?? 200000,
+          thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
+          systemPrompt: effectiveSystemPrompt,
+          workspacePath: null,
+          messages: modelMessages,
+          contextCompaction: contextCompactionRef.current,
+          selectedReferenceFiles: [],
+          allowedTools: storyAllowedTools,
+          rolePlayContext,
+        }
+      });
+
+      activeRunRef.current = { runId, messageId: agentMessageId };
+      setActiveRun({ runId, messageId: agentMessageId });
+    } catch (err) {
+      activeRunRef.current = { runId: null, messageId: null };
+      setActiveRun({ runId: null, messageId: null });
+      setIsStreaming(false);
+      setMessages((prev) => prev.map((msg) => (
+        msg.id === agentMessageId
+          ? { ...msg, content: `请求冒险发生故障：${String(err)}` }
+          : msg
+      )));
+    }
+  };
+
+  const toggleBlock = (id: string) => {
+    setExpandedBlocks((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
   const refreshSessions = async () => {
     try {
-      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'story-session-' });
+      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'story-session-', sessionKind: 'story' });
       setSessions(summaries);
     } catch (err) {
       console.error('读取故事会话失败:', err);
@@ -871,6 +650,7 @@ const Story: React.FC = () => {
           id: sessionIdRef.current,
           title: sessionTitleRef.current,
           savedAt: Date.now(),
+          sessionKind: 'story',
           messages: messagesRef.current,
           selectedReferenceFiles: [],
           selectedOutlineFile: null,
@@ -879,12 +659,46 @@ const Story: React.FC = () => {
           isArchived: isSessionArchivedRef.current,
           selectedWorldBookId,
           dynamicRoleLoadingEnabled,
-          characterCardIds: selectedCharacterCardIdsRef.current
+          characterCardIds: selectedCharacterCardIdsRef.current,
         }
       });
       await refreshSessions();
     } catch (err) {
       console.error('保存故事会话失败:', err);
+    }
+  };
+
+  const handleSaveConversation = async () => {
+    if (messages.length === 0 || isStreaming || isSessionArchived) {
+      message.warning('当前无可保存的对话内容');
+      return;
+    }
+    setIsSavingConversation(true);
+    try {
+      const chatHistoryText = messages
+        .filter(m => m.role === 'user' || m.role === 'agent')
+        .map(m => `${m.role === 'user' ? '我' : '故事旁白与NPC'}: ${m.content.replace(/\[\[THINKING:[^\]]+\]\]/g, '').trim()}`)
+        .join('\n\n');
+      const generatedTitle = await invoke<string>('summarize_text', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: storyAgentConfig.temperature ?? 0.3,
+          maxOutputTokens: 64,
+          text: chatHistoryText,
+        },
+      });
+      sessionTitleRef.current = generatedTitle;
+      setSessionTitle(generatedTitle);
+      await saveCurrentSession();
+      message.success('对话已保存');
+    } catch (err) {
+      console.error('保存对话失败:', err);
+      message.error(`保存对话失败：${String(err)}`);
+    } finally {
+      setIsSavingConversation(false);
     }
   };
 
@@ -899,6 +713,7 @@ const Story: React.FC = () => {
       setSelectedWorldBookId(session.selectedWorldBookId ?? null);
       setSelectedCharacterCardIds(session.characterCardIds ?? []);
       setDynamicRoleLoadingEnabled(session.dynamicRoleLoadingEnabled ?? false);
+      // reset any book-travel state if needed
       contextCompactionRef.current = session.contextCompaction ?? null;
       setContextCompaction(session.contextCompaction ?? null);
       setIsStreaming(false);
@@ -1045,8 +860,7 @@ const Story: React.FC = () => {
       sessionTitleRef.current = finalTitle;
       isSessionArchivedRef.current = true;
 
-      // 3. Update backend session title and persist
-      await invoke('update_agent_session_title', { id: sessionIdRef.current, title: finalTitle });
+      // 3. Save the archived session
       await saveCurrentSession();
 
       message.success('冒险记忆成功封存到选中的角色卡！本局会话已锁定归档。');
@@ -1086,6 +900,7 @@ const Story: React.FC = () => {
   );
 
   const hasMessages = messages.length > 0;
+
 
   return (
     <div className="agent-chat" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#faf9f5' }}>
@@ -1265,110 +1080,59 @@ const Story: React.FC = () => {
         ) : null}
       </Modal>
 
-      {/* Book Travel Progress Modal */}
-      <Modal
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e', fontSize: '16px', fontWeight: 600 }}>
-              <ExperimentOutlined style={{ color: '#d97757' }} />
-              <span>
-                {startProgressPhase === 'planner' && '正在规划下一场景...'}
-                {startProgressPhase === 'writer' && '正在书写场景...'}
-                {startProgressPhase === 'done' && '完成'}
-                {startProgressPhase === 'error' && '出错了'}
-                {startProgressPhase === 'cancelled' && '已中断'}
-              </span>
-            </div>
-            <span style={{ fontSize: 12, color: '#8c8882', fontFamily: 'monospace' }}>
-              {formatElapsed(startElapsedMs)}
-            </span>
-          </div>
-        }
-        open={startProgressOpen}
-        onCancel={handleCancelStart}
-        footer={
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button onClick={handleCancelStart} disabled={startProgressPhase === 'done' || startProgressPhase === 'error' || startProgressPhase === 'cancelled'}>
-              中断
-            </Button>
-          </div>
-        }
-        width={600}
-        closable={false}
-        maskClosable={false}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {startProgressPhase === 'planner' && (
-            <div>
-              <div style={{ color: '#8c8882', fontSize: 13, marginBottom: 8 }}>
-                剧情规划师正在分析你的行动...
-              </div>
-            </div>
-          )}
-          {startProgressPhase === 'writer' && (
-            <div>
-              <div style={{ color: '#8c8882', fontSize: 13, marginBottom: 8 }}>
-                场景写手正在生成新的剧情...
-              </div>
-            </div>
-          )}
-          {startProgressPhase === 'done' && (
-            <div style={{ color: '#52c41a', fontSize: 14 }}>
-              场景生成完成！
-            </div>
-          )}
-          {startProgressPhase === 'error' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ color: '#ff4d4f', fontSize: 14 }}>
-                生成失败：{startProgressError}
-              </div>
-            </div>
-          )}
-          {startProgressPhase === 'cancelled' && (
-            <div style={{ color: '#8c8882', fontSize: 14 }}>
-              已中断生成
-            </div>
-          )}
-        </div>
-      </Modal>
-
       {/* Header */}
       <div className="agent-chat__header" style={{ borderBottom: '1px solid #eae6df', padding: '16px 24px' }}>
         <div className="agent-chat__title">
           <CompassOutlined style={{ color: '#d97757', fontSize: 18 }} />
           <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {sessionTitle}
+            {hasMessages ? sessionTitle : '冒险'}
             <span style={{ fontSize: 12, color: '#8c8882', fontWeight: 400 }}>
               ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色{dynamicRoleLoadingEnabled ? ' · 动态加载' : ''})
-              {bookTravelStore.scenes.length > 0 && (
-                <Tag color="#d97757" style={{ marginLeft: 8, borderRadius: 4 }}>
-                  穿书中 · {bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId)?.title || '场景'}
-                </Tag>
-              )}
             </span>
           </h3>
         </div>
 
         <div className="agent-chat__header-actions">
           {selectedCards.length > 0 && (
-            <Tooltip title={isSessionArchived ? "当前冒险记录已归档封存" : "封存本局冒险记忆并锁定会话"}>
-              <Button
-                type="text"
-                disabled={isStreaming || isSessionArchived || messages.length === 0}
-                icon={<FileProtectOutlined />}
-                onClick={handleArchiveMemory}
-                style={{
-                  color: (isSessionArchived || messages.length === 0) ? '#8c8882' : '#d97757',
-                  fontWeight: 500,
-                  fontSize: 13,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4
-                }}
-              >
-                封存记忆
-              </Button>
-            </Tooltip>
+            <>
+              <Tooltip title="保存当前对话">
+                <Button
+                  type="text"
+                  loading={isSavingConversation}
+                  disabled={isStreaming || isSessionArchived || messages.length === 0 || isSavingConversation}
+                  icon={<SaveOutlined />}
+                  onClick={() => void handleSaveConversation()}
+                  style={{
+                    color: (isSessionArchived || messages.length === 0) ? '#8c8882' : '#d97757',
+                    fontWeight: 500,
+                    fontSize: 13,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  保存对话
+                </Button>
+              </Tooltip>
+              <Tooltip title={isSessionArchived ? "当前冒险记录已归档封存" : "封存本局冒险记忆并锁定会话"}>
+                <Button
+                  type="text"
+                  disabled={isStreaming || isSessionArchived || messages.length === 0}
+                  icon={<FileProtectOutlined />}
+                  onClick={handleArchiveMemory}
+                  style={{
+                    color: (isSessionArchived || messages.length === 0) ? '#8c8882' : '#d97757',
+                    fontWeight: 500,
+                    fontSize: 13,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  封存记忆
+                </Button>
+              </Tooltip>
+            </>
           )}
 
           <Tooltip title="重开新冒险">
@@ -1417,25 +1181,209 @@ const Story: React.FC = () => {
       </div>
 
       {/* Main chat layout */}
-      {bookTravelStore.scenes.length > 0 ? (
+      {hasMessages ? (
         <div ref={chatHistoryRef} className="agent-chat__history" style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
-          {bookTravelStore.turns.map((turn) => (
-            <div key={turn.id} style={{ marginBottom: 24 }}>
-              <div style={{ textAlign: 'right', marginBottom: 8 }}>
-                <div style={{ display: 'inline-block', background: '#d97757', color: '#fff', padding: '10px 14px', borderRadius: '12px 12px 2px 12px', maxWidth: '80%', fontSize: 14, lineHeight: 1.6 }}>
-                  {turn.userInput}
-                </div>
-              </div>
-              <div style={{ textAlign: 'left' }}>
-                <div style={{ display: 'inline-block', background: '#fff', border: '1px solid #eae6df', padding: '12px 14px', borderRadius: '12px 12px 12px 2px', maxWidth: '80%', color: '#33312e', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-                  {turn.narrativeOutput}
-                </div>
-              </div>
+
+          {/* Foldable System Prompt */}
+          <div className="agent-message-row agent-message-row--system">
+            <div className="agent-message-bubble agent-message-bubble--system">
+              <FoldBlock
+                icon={<InfoCircleOutlined />}
+                variant="thinking"
+                title={dynamicRoleLoadingEnabled ? '冒险设定系统提示词（角色卡动态加载）' : '冒险设定系统提示词（已融汇世界书与多角色卡）'}
+                preview={effectiveSystemPrompt.slice(0, 80) + (effectiveSystemPrompt.length > 80 ? '...' : '')}
+                detail={effectiveSystemPrompt}
+                expanded={Boolean(expandedBlocks['story-system-prompt'])}
+                onToggle={() => toggleBlock('story-system-prompt')}
+              />
             </div>
-          ))}
+          </div>
+
+          {messages.map((msg, index) => {
+            const lastUserIndex = [...messages].reverse().findIndex(m => m.role === 'user');
+            const realLastUserIndex = lastUserIndex !== -1 ? messages.length - 1 - lastUserIndex : -1;
+
+            const lastAgentIndex = [...messages].reverse().findIndex(m => m.role === 'agent');
+            const realLastAgentIndex = lastAgentIndex !== -1 ? messages.length - 1 - lastAgentIndex : -1;
+
+            const isLastUser = index === realLastUserIndex;
+            const isLastAgent = index === realLastAgentIndex;
+
+            return (
+              <div className={`agent-message-row agent-message-row--${msg.role}`} key={msg.id}>
+                <div style={{ display: 'flex', flexDirection: 'column', maxWidth: '88%', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                  <div className={`agent-message-bubble agent-message-bubble--${msg.role}`} style={{ width: '100%', maxWidth: '100%' }}>
+                    {editingMessageId === msg.id ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '240px' }}>
+                        <Input.TextArea
+                          value={editingContent}
+                          onChange={(e) => setEditingContent(e.target.value)}
+                          autoSize={{ minRows: 2, maxRows: 6 }}
+                          style={{
+                            borderRadius: '6px',
+                            borderColor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : '#eae6df',
+                            background: msg.role === 'user' ? 'rgba(0,0,0,0.1)' : '#ffffff',
+                            color: msg.role === 'user' ? '#ffffff' : '#33312e'
+                          }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                          <Button
+                            size="small"
+                            onClick={handleCancelEdit}
+                            style={{
+                              borderRadius: '4px',
+                              borderColor: msg.role === 'user' ? 'rgba(255,255,255,0.3)' : undefined,
+                              background: msg.role === 'user' ? 'transparent' : undefined,
+                              color: msg.role === 'user' ? '#ffffff' : undefined
+                            }}
+                          >
+                            取消
+                          </Button>
+                          <Button
+                            type="primary"
+                            size="small"
+                            onClick={() => handleSaveEdit(msg)}
+                            style={{
+                              borderRadius: '4px',
+                              backgroundColor: msg.role === 'user' ? '#ffffff' : '#d97757',
+                              borderColor: msg.role === 'user' ? '#ffffff' : '#d97757',
+                              color: msg.role === 'user' ? '#d97757' : '#ffffff',
+                              fontWeight: 500
+                            }}
+                          >
+                            保存
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {msg.thinking && (!msg.thinkingBlocks || msg.thinkingBlocks.length === 0) && (
+                          <FoldBlock
+                            icon={<BulbOutlined />}
+                            variant="thinking"
+                            title="思考推演"
+                            preview={msg.thinking}
+                            expanded={Boolean(expandedBlocks[`${msg.id}-thinking`])}
+                            onToggle={() => toggleBlock(`${msg.id}-thinking`)}
+                          />
+                        )}
+
+                        {(() => {
+                          const parts = msg.content ? msg.content.split(/(\[\[(?:TOOL|THINKING):[^\]]+\]\])/) : [''];
+                          const renderedToolIds = new Set<string>();
+
+                          const renderedParts = parts.map((part, i) => {
+                            const toolMatch = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
+                            if (toolMatch) {
+                              const toolId = toolMatch[1];
+                              const toolIndex = msg.tools?.findIndex(t => t.id === toolId);
+                              if (toolIndex !== undefined && toolIndex >= 0) {
+                                const tool = msg.tools![toolIndex];
+                                renderedToolIds.add(toolId);
+                                return renderStoryTool(
+                                  tool,
+                                  `${msg.id}-tool-${toolIndex}`,
+                                  Boolean(expandedBlocks[`${msg.id}-tool-${toolIndex}`]),
+                                  () => toggleBlock(`${msg.id}-tool-${toolIndex}`),
+                                );
+                              }
+                              return null;
+                            }
+
+                            const thinkingMatch = part.match(/^\[\[THINKING:([^\]]+)\]\]$/);
+                            if (thinkingMatch) {
+                              const thinkingId = thinkingMatch[1];
+                              const block = msg.thinkingBlocks?.find(b => b.id === thinkingId);
+                              if (block) {
+                                return (
+                                  <FoldBlock
+                                    icon={<BulbOutlined />}
+                                    variant="thinking"
+                                    key={`thinking-${thinkingId}`}
+                                    title="思考过程"
+                                    preview={block.content}
+                                    expanded={Boolean(expandedBlocks[`${msg.id}-thinking-${thinkingId}`])}
+                                    onToggle={() => toggleBlock(`${msg.id}-thinking-${thinkingId}`)}
+                                  />
+                                );
+                              }
+                              return null;
+                            }
+
+                            return part.trim() ? (
+                              <div className="agent-markdown" key={`md-${i}`}>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {part}
+                                </ReactMarkdown>
+                              </div>
+                            ) : null;
+                          });
+
+                          const unrenderedTools = (msg.tools ?? []).map((tool, toolIndex) => {
+                            if (tool.id && renderedToolIds.has(tool.id)) return null;
+                            return renderStoryTool(
+                              tool,
+                              `${msg.id}-tool-extra-${toolIndex}`,
+                              Boolean(expandedBlocks[`${msg.id}-tool-extra-${toolIndex}`]),
+                              () => toggleBlock(`${msg.id}-tool-extra-${toolIndex}`),
+                            );
+                          });
+
+                          return [...renderedParts, ...unrenderedTools];
+                        })()}
+                      </>
+                    )}
+                  </div>
+
+                  {!isSessionArchived && editingMessageId !== msg.id && (
+                    <>
+                      {isLastUser && msg.role === 'user' && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px', paddingRight: '4px' }}>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            disabled={isStreaming}
+                            onClick={() => handleStartEdit(msg)}
+                            style={{ color: '#d97757', fontSize: '12px', padding: '0 4px', height: 'auto', display: 'flex', alignItems: 'center' }}
+                          >
+                            编辑
+                          </Button>
+                        </div>
+                      )}
+                      {isLastAgent && msg.role === 'agent' && (
+                        <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingLeft: '4px' }}>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<RedoOutlined />}
+                            disabled={isStreaming}
+                            onClick={handleRegenerateAssistantMessage}
+                            style={{ color: '#d97757', fontSize: '12px', padding: '0 4px', height: 'auto', display: 'flex', alignItems: 'center' }}
+                          >
+                            重新生成
+                          </Button>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            disabled={isStreaming}
+                            onClick={() => handleStartEdit(msg)}
+                            style={{ color: '#d97757', fontSize: '12px', padding: '0 4px', height: 'auto', display: 'flex', alignItems: 'center' }}
+                          >
+                            编辑
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
-        /* Book Travel Setup Wizard */
+        /* Empty/Wizard Setup State */
         <div style={{
           flex: 1,
           display: 'flex',
@@ -1451,10 +1399,10 @@ const Story: React.FC = () => {
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
             <CompassOutlined style={{ fontSize: '56px', color: '#d97757', marginBottom: '16px', opacity: 0.9 }} />
             <h2 style={{ fontSize: '26px', fontWeight: 600, color: '#33312e', margin: '0 0 8px 0', letterSpacing: '-0.5px' }}>
-              穿书页
+              冒险页
             </h2>
             <p style={{ color: '#8c8882', fontSize: '15px', margin: 0 }}>
-              选择穿书素材与入场点，进入小说世界展开独一无二的剧情体验
+              选择世界设定与冒险角色，即刻启程展开独一无二的奇幻历险
             </p>
           </div>
 
@@ -1469,168 +1417,133 @@ const Story: React.FC = () => {
             flexDirection: 'column',
             gap: '24px'
           }}>
-            {/* Select Assembled Material */}
+            {/* World Book Dropdown Selector */}
             <div>
               <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px' }}>
-                选择穿书素材
+                选择冒险世界设定集 (世界书)
               </div>
-              {bookTravelStore.assembledMaterials.length === 0 ? (
-                <div style={{ color: '#8c8882', fontSize: '13px', textAlign: 'center', padding: '12px', border: '1px dashed #eae6df', borderRadius: '6px', background: '#faf9f5' }}>
-                  暂无已装配素材，请先前往<Button type="link" style={{ padding: 0, height: 'auto' }} onClick={() => navigate('/book-travel-materials')}>穿书素材页</Button>装配素材
-                </div>
-              ) : (
-                <Select
-                  placeholder="选择一个已装配素材"
-                  value={bookTravelStore.selectedMaterialId}
-                  onChange={(id) => bookTravelStore.loadAssembledMaterial(id)}
-                  style={{ width: '100%' }}
-                  options={bookTravelStore.assembledMaterials.map((m) => ({ value: m.id, label: m.title }))}
-                />
-              )}
+              <Select
+                placeholder="选择一个世界设定..."
+                value={selectedWorldBookId}
+                onChange={setSelectedWorldBookId}
+                style={{ width: '100%' }}
+                options={worldBooks.map((wb) => ({ value: wb.id, label: wb.name }))}
+              />
             </div>
 
-            {/* Select Entry Point */}
-            {bookTravelStore.selectedMaterialId && bookTravelStore.entryPoints.length > 0 && (
-              <div>
-                <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px' }}>
-                  选择入场点
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {bookTravelStore.entryPoints.map((ep) => {
-                    const selected = bookTravelStore.selectedEntryPointId === ep.id;
+            {/* Character Cards Multi Selector */}
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                <span>选择共同历险的角色卡 (可多选)</span>
+                <span style={{ fontSize: '12px', fontWeight: 400, color: '#d97757', cursor: 'pointer' }} onClick={() => selectItem(null, null)}>前往背景页创建人设 &gt;</span>
+              </div>
+
+              {characterCards.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                  {characterCards.map((cc) => {
+                    const isChecked = selectedCharacterCardIds.includes(cc.id);
                     return (
-                      <div
-                        key={ep.id}
-                        onClick={() => bookTravelStore.setSelectedEntryPointId(ep.id)}
+                      <Tag.CheckableTag
+                        key={cc.id}
+                        checked={isChecked}
+                        onChange={(checked) => {
+                          const nextIds = checked
+                            ? [...selectedCharacterCardIds, cc.id]
+                            : selectedCharacterCardIds.filter(id => id !== cc.id);
+                          setSelectedCharacterCardIds(nextIds);
+                        }}
                         style={{
-                          padding: '12px 14px',
-                          borderRadius: 8,
-                          border: selected ? '1px solid #d97757' : '1px solid #eae6df',
-                          background: selected ? '#fff7f2' : '#ffffff',
-                          cursor: 'pointer',
+                          padding: '6px 14px',
+                          fontSize: '13px',
+                          border: isChecked ? '1px solid #d97757' : '1px solid #eae6df',
+                          borderRadius: '6px',
+                          backgroundColor: isChecked ? '#fff7f2' : '#faf9f5',
+                          color: isChecked ? '#d97757' : '#5c5751',
+                          margin: 0,
+                          cursor: 'pointer'
                         }}
                       >
-                        <div style={{ fontWeight: 600, color: selected ? '#d97757' : '#33312e', fontSize: 14 }}>{ep.title}</div>
-                        <div style={{ fontSize: 12, color: '#8c8882', marginTop: 4 }}>{ep.summary}</div>
-                        {ep.risk && <div style={{ fontSize: 12, color: '#ff4d4f', marginTop: 4 }}>风险：{ep.risk}</div>}
-                      </div>
+                        <UserOutlined style={{ marginRight: 6 }} />
+                        {cc.name}
+                      </Tag.CheckableTag>
                     );
                   })}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div style={{ color: '#8c8882', fontSize: '13px', textAlign: 'center', padding: '12px', border: '1px dashed #eae6df', borderRadius: '6px', background: '#faf9f5' }}>
+                  目前还没有角色卡，去背景页新建一个吧！
+                </div>
+              )}
+            </div>
 
-            {/* Select User Character */}
-            {bookTravelStore.selectedEntryPointId && (
-              <div>
-                <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px' }}>
-                  选择扮演身份
-                </div>
-                {bookTravelStore.recommendedUserCharacters.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
-                    {bookTravelStore.recommendedUserCharacters.map((uc) => {
-                      const selected = bookTravelStore.userCharacter?.name === uc.name;
-                      return (
-                        <Tag.CheckableTag
-                          key={uc.name}
-                          checked={selected}
-                          onChange={(checked) => {
-                            if (checked) bookTravelStore.setUserCharacter(uc);
-                          }}
-                          style={{
-                            padding: '6px 14px',
-                            fontSize: '13px',
-                            border: selected ? '1px solid #d97757' : '1px solid #eae6df',
-                            borderRadius: '6px',
-                            backgroundColor: selected ? '#fff7f2' : '#faf9f5',
-                            color: selected ? '#d97757' : '#5c5751',
-                            margin: 0,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          <UserOutlined style={{ marginRight: 6 }} />
-                          {uc.name}（{uc.identity}）
-                        </Tag.CheckableTag>
-                      );
-                    })}
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <Input
-                    placeholder="姓名"
-                    value={bookTravelStore.userCharacter?.name || ''}
-                    onChange={(e) => bookTravelStore.setUserCharacter({ name: e.target.value, identity: bookTravelStore.userCharacter?.identity || '', goal: bookTravelStore.userCharacter?.goal || '' })}
-                    style={{ flex: 1 }}
-                  />
-                  <Input
-                    placeholder="身份"
-                    value={bookTravelStore.userCharacter?.identity || ''}
-                    onChange={(e) => bookTravelStore.setUserCharacter({ name: bookTravelStore.userCharacter?.name || '', identity: e.target.value, goal: bookTravelStore.userCharacter?.goal || '' })}
-                    style={{ flex: 1 }}
-                  />
-                </div>
-                <Input.TextArea
-                  placeholder="目标（可选）"
-                  value={bookTravelStore.userCharacter?.goal || ''}
-                  onChange={(e) => bookTravelStore.setUserCharacter({ name: bookTravelStore.userCharacter?.name || '', identity: bookTravelStore.userCharacter?.identity || '', goal: e.target.value })}
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                  style={{ marginTop: 8 }}
-                />
+            {/* Initial Plot TextArea */}
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px' }}>
+                设定初始剧情
               </div>
-            )}
+              <Input.TextArea
+                value={initialPlot}
+                onChange={(e) => setInitialPlot(e.target.value)}
+                placeholder="请粗略描述故事的开局走向。例如：“我们在一个漆黑的山谷里醒来，天空中划过雷电，远处传来了野兽的咆哮声。我手里只有一把生锈的铁剑，大家都聚在我身边...”"
+                autoSize={{ minRows: 4, maxRows: 8 }}
+                style={{
+                  borderRadius: '8px',
+                  borderColor: '#eae6df',
+                  backgroundColor: '#faf9f5',
+                  fontSize: '14px',
+                  lineHeight: 1.6
+                }}
+              />
+            </div>
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '16px',
+              padding: '12px 14px',
+              border: '1px solid #f0e7de',
+              borderRadius: '8px',
+              background: '#fffaf6'
+            }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e' }}>
+                  角色卡动态加载
+                </div>
+                <div style={{ fontSize: '12px', color: '#8c8882', marginTop: 4 }}>
+                  开启后，冒险中由 Agent 按角色名调用角色卡回复
+                </div>
+              </div>
+              <Switch
+                checked={dynamicRoleLoadingEnabled}
+                onChange={setDynamicRoleLoadingEnabled}
+              />
+            </div>
 
             {/* Start Button */}
             <Button
               type="primary"
               size="large"
               icon={<PlayCircleOutlined />}
-              onClick={startBookTravelAdventure}
-              disabled={!bookTravelStore.selectedMaterialId || !bookTravelStore.selectedEntryPointId || !bookTravelStore.userCharacter?.name?.trim()}
+              onClick={startAdventure}
+              disabled={!selectedWorldBookId || !initialPlot.trim()}
               style={{
-                backgroundColor: (bookTravelStore.selectedMaterialId && bookTravelStore.selectedEntryPointId && bookTravelStore.userCharacter?.name?.trim()) ? '#d97757' : undefined,
-                borderColor: (bookTravelStore.selectedMaterialId && bookTravelStore.selectedEntryPointId && bookTravelStore.userCharacter?.name?.trim()) ? '#d97757' : undefined,
+                backgroundColor: (selectedWorldBookId && initialPlot.trim()) ? '#d97757' : undefined,
+                borderColor: (selectedWorldBookId && initialPlot.trim()) ? '#d97757' : undefined,
                 borderRadius: '8px',
                 fontWeight: 600,
                 marginTop: '12px'
               }}
             >
-              开始穿书
+              开启冒险旅程
             </Button>
           </div>
-        </div>
-      )}
 
-      {/* Book Travel Scene Info */}
-      {bookTravelStore.scenes.length > 0 && !bookTravelStore.isCompleted && (
-        <div style={{ borderTop: '1px solid #f0e7de', padding: '16px 24px', background: '#faf9f5' }}>
-          {(() => {
-            const currentScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
-            const currentBeat = currentScene?.beats.find((b) => b.id === bookTravelStore.currentBeatId) || currentScene?.beats[0];
-            const currentState = (bookTravelStore.currentState || {}) as Record<string, unknown>;
-            return currentScene && currentBeat ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {bookTravelStore.userCharacter && (
-                  <Tag color="#d97757" style={{ borderRadius: 4, margin: 0, width: 'fit-content' }}>
-                    扮演身份：{bookTravelStore.userCharacter.name}（{bookTravelStore.userCharacter.identity}）
-                  </Tag>
-                )}
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 600, color: '#33312e' }}>{currentScene.title}</div>
-                  <div style={{ color: '#8c8882', fontSize: 12, marginTop: 4 }}>
-                    {[currentScene.time || String(currentState.time || ''), currentScene.location || String(currentState.location || ''), currentScene.currentSituation].filter(Boolean).join(' · ')}
-                  </div>
-                </div>
-                <div style={{ border: '1px solid #eae6df', borderRadius: 8, background: '#ffffff', padding: '12px 14px', color: '#33312e', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-                  {currentBeat.content}
-                </div>
-              </div>
-            ) : null;
-          })()}
         </div>
       )}
 
       {/* Composer Input Area */}
-      {(hasMessages || bookTravelStore.scenes.length > 0) && !bookTravelStore.isCompleted && (
+      {hasMessages && (
         <div className="agent-composer" style={{
           padding: '16px 24px 24px 24px',
           width: '100%',
@@ -1691,17 +1604,11 @@ const Story: React.FC = () => {
               placeholder={
                 isSessionArchived
                   ? "本局冒险记忆已被封存，无法继续发送指令"
-                  : bookTravelStore.scenes.length > 0
-                    ? inputMode === 'speech'
-                      ? "说些什么..."
-                      : inputMode === 'behavior'
-                        ? "做点什么..."
-                        : "推进剧情..."
-                    : inputMode === 'speech'
-                      ? "以你角色的口吻输入对话内容，按 Cmd/Ctrl + Enter 提交..."
-                      : inputMode === 'behavior'
-                        ? "描述你角色采取的具体动作（例如：撬门、施法、隐蔽等）..."
-                        : "以旁白口吻描述剧情推进（例如：天空突然放晴、怪物发动袭击等）..."
+                  : inputMode === 'speech'
+                    ? "以你角色的口吻输入对话内容，按 Cmd/Ctrl + Enter 提交..."
+                    : inputMode === 'behavior'
+                      ? "描述你角色采取的具体动作（例如：撬门、施法、隐蔽等）..."
+                      : "以旁白口吻描述剧情推进（例如：天空突然放晴、怪物发动袭击等）..."
               }
               value={input}
             />
@@ -1754,6 +1661,34 @@ const Story: React.FC = () => {
   );
 };
 
+function FoldBlock({
+  icon,
+  title,
+  preview,
+  detail,
+  expanded,
+  onToggle,
+  variant = 'tool',
+}: {
+  icon: React.ReactNode;
+  title: string;
+  preview: string;
+  detail?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  variant?: 'tool' | 'thinking';
+}) {
+  return (
+    <div className={`agent-fold-block agent-fold-block--${variant}`}>
+      <button className="agent-fold-block__summary" onClick={onToggle} type="button">
+        <span className="agent-fold-block__title">{icon}{title}</span>
+        <span className="agent-fold-block__preview">{preview || '暂无内容'}</span>
+      </button>
+      {expanded && <pre className="agent-fold-block__detail">{detail ?? preview}</pre>}
+    </div>
+  );
+}
+
 function updateMessageTool(
   messages: Message[],
   messageId: string,
@@ -1786,4 +1721,59 @@ function updateMessageTool(
     return { ...msg, tools };
   });
 }
-export default Story;
+
+function renderStoryTool(
+  tool: AgentToolEntry,
+  blockId: string,
+  expanded: boolean,
+  onToggle: () => void,
+) {
+  if (tool.name === 'role_play') {
+    if (!tool.result.trim()) {
+      return null;
+    }
+    return <RolePlayToolBubble key={`role-play-${tool.id || blockId}`} tool={tool} />;
+  }
+
+  return (
+    <FoldBlock
+      icon={<InfoCircleOutlined />}
+      variant="tool"
+      key={`tool-${tool.id || blockId}`}
+      title={`工具：${tool.name}`}
+      preview={tool.result}
+      expanded={expanded}
+      onToggle={onToggle}
+    />
+  );
+}
+
+function RolePlayToolBubble({ tool }: { tool: AgentToolEntry }) {
+  const characterName = getRolePlayCharacterName(tool.arguments);
+  return (
+    <div style={{
+      width: '100%',
+      border: '1px solid #f1dfd4',
+      borderRadius: '8px',
+      background: '#fffaf6',
+      padding: '12px 14px',
+      margin: '8px 0'
+    }}>
+      <div style={{
+        fontSize: '13px',
+        fontWeight: 700,
+        color: '#d97757',
+        marginBottom: '8px'
+      }}>
+        {characterName}
+      </div>
+      <div className="agent-markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {tool.result || '角色暂未回应。'}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
+export default Adventure;

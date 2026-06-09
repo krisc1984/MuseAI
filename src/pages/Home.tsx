@@ -40,8 +40,9 @@ const writingModules = [
 const companionModules = [
   { key: '/background', label: '背景', icon: <GlobalOutlined />, color: '#8b7355' },
   { key: '/chat', label: '聊天', icon: <MessageOutlined />, color: '#8b7355' },
-  { key: '/story', label: '冒险', icon: <CompassOutlined />, color: '#8b7355' },
+  { key: '/adventure', label: '冒险', icon: <CompassOutlined />, color: '#8b7355' },
   { key: '/bond', label: '羁绊', icon: <HeartOutlined />, color: '#8b7355' },
+  { key: '/story', label: '穿书', icon: <CompassOutlined />, color: '#8b7355' },
 ];
 
 function getGreeting(): string {

@@ -96,6 +96,7 @@ pub async fn cancel_background_task(task_id: String) -> Result<bool, String> {
 pub fn list_agent_sessions(
     app: AppHandle,
     prefix: Option<String>,
+    session_kind: Option<String>,
 ) -> Result<Vec<AgentSessionSummary>, String> {
     let dir = agent_sessions_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -120,15 +121,22 @@ pub fn list_agent_sessions(
                 continue;
             }
         }
-        if (record.id.starts_with("partner-session-") || record.id.starts_with("story-session-"))
-            && record.is_archived != Some(true)
-        {
-            continue;
+        if let Some(ref sk) = session_kind {
+            let record_sk = record.session_kind.as_deref();
+            let matches = if sk == "story" {
+                record_sk == Some("story") || record_sk.is_none()
+            } else {
+                record_sk == Some(sk)
+            };
+            if !matches {
+                continue;
+            }
         }
         summaries.push(AgentSessionSummary {
             id: record.id,
             title: record.title,
             saved_at: record.saved_at,
+            session_kind: record.session_kind,
             character_card_id: record.character_card_id,
             character_card_ids: record.character_card_ids,
             selected_world_book_id: record.selected_world_book_id,
@@ -160,6 +168,7 @@ pub fn save_agent_session(
         id: session.id,
         title: session.title,
         saved_at: session.saved_at,
+        session_kind: session.session_kind,
         character_card_id: session.character_card_id,
         character_card_ids: session.character_card_ids,
         selected_world_book_id: session.selected_world_book_id,
@@ -303,6 +312,7 @@ pub fn update_agent_session_title(
         id: record.id,
         title: record.title,
         saved_at: record.saved_at,
+        session_kind: record.session_kind,
         character_card_id: record.character_card_id,
         character_card_ids: record.character_card_ids,
         selected_world_book_id: record.selected_world_book_id,
@@ -1075,10 +1085,7 @@ fn parse_background_character_card_response(
     Ok(item)
 }
 
-async fn with_cancellation<T, F, E>(
-    cancel_token: &AtomicBool,
-    future: F,
-) -> Result<T, String>
+async fn with_cancellation<T, F, E>(cancel_token: &AtomicBool, future: F) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, E>>,
     E: std::fmt::Display,
@@ -1144,8 +1151,8 @@ async fn call_background_llm(
             }
 
             let json: Value = with_cancellation(cancel_token, response.json()).await?;
-            let provider_response = serde_json::to_string_pretty(&json)
-                .unwrap_or_else(|_| json.to_string());
+            let provider_response =
+                serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string());
             let content = json
                 .get("content")
                 .and_then(|c| c.as_array())
@@ -1191,8 +1198,8 @@ async fn call_background_llm(
             }
 
             let json: Value = with_cancellation(cancel_token, response.json()).await?;
-            let provider_response = serde_json::to_string_pretty(&json)
-                .unwrap_or_else(|_| json.to_string());
+            let provider_response =
+                serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string());
             let content = json
                 .get("choices")
                 .and_then(|c| c.as_array())
@@ -1273,7 +1280,8 @@ pub async fn generate_background_stage_one(
         request.temperature.unwrap_or(0.0),
         request.thinking_depth.as_deref(),
         &cancel_token,
-    ).await;
+    )
+    .await;
 
     // 如果是取消，等待 reqwest 底层连接清理
     if let Err(ref e) = raw_content {
@@ -1325,7 +1333,8 @@ pub async fn generate_background_character_card(
         request.temperature.unwrap_or(0.0),
         request.thinking_depth.as_deref(),
         &cancel_token,
-    ).await;
+    )
+    .await;
 
     // 如果是取消，等待 reqwest 底层连接清理
     if let Err(ref e) = raw_content {
@@ -2403,7 +2412,11 @@ async fn call_reverse_outline_llm(
     }
 }
 
-fn format_reverse_outline_send_error(interface_label: &str, endpoint: &str, error: &reqwest::Error) -> String {
+fn format_reverse_outline_send_error(
+    interface_label: &str,
+    endpoint: &str,
+    error: &reqwest::Error,
+) -> String {
     format!(
         "{}接口请求发送失败：{}（请求地址：{}。请检查设置中的接口类型、API 地址、模型是否匹配。）",
         interface_label, error, endpoint
@@ -2479,7 +2492,11 @@ async fn call_reverse_outline_llm_stream(
                         if !full_content.is_empty() {
                             break;
                         }
-                        return Err(format_reverse_outline_send_error("Anthropic", &endpoint, &e));
+                        return Err(format_reverse_outline_send_error(
+                            "Anthropic",
+                            &endpoint,
+                            &e,
+                        ));
                     }
                 }
             }
@@ -2541,7 +2558,11 @@ async fn call_reverse_outline_llm_stream(
                         if !full_content.is_empty() {
                             break;
                         }
-                        return Err(format_reverse_outline_send_error("OpenAI 兼容", &endpoint, &e));
+                        return Err(format_reverse_outline_send_error(
+                            "OpenAI 兼容",
+                            &endpoint,
+                            &e,
+                        ));
                     }
                 }
             }
@@ -2551,7 +2572,10 @@ async fn call_reverse_outline_llm_stream(
     Ok(full_content.trim().to_string())
 }
 
-fn short_reverse_outline_prompt(text: &str, system_prompt_override: Option<&str>) -> (String, String) {
+fn short_reverse_outline_prompt(
+    text: &str,
+    system_prompt_override: Option<&str>,
+) -> (String, String) {
     let system_prompt = system_prompt_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -2587,7 +2611,10 @@ fn long_summary_prompt(
     Ok((system_prompt, user_prompt))
 }
 
-fn long_final_prompt(summaries: &[Value], system_prompt_override: Option<&str>) -> Result<(String, String), String> {
+fn long_final_prompt(
+    summaries: &[Value],
+    system_prompt_override: Option<&str>,
+) -> Result<(String, String), String> {
     let system_prompt = system_prompt_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -2842,7 +2869,9 @@ pub fn retry_and_finalize_reverse_outline(
             let success_set: std::collections::HashSet<usize> =
                 new_successes.iter().map(|(i, _)| *i).collect();
             for i in &failed_indices {
-                if !success_set.contains(i) && !still_failed.iter().any(|failure| failure.index == *i) {
+                if !success_set.contains(i)
+                    && !still_failed.iter().any(|failure| failure.index == *i)
+                {
                     still_failed.push(ReverseOutlineBatchError {
                         index: *i,
                         range: format!("{}-{}", i * 10 + 1, i * 10 + 10),
@@ -2899,10 +2928,7 @@ pub fn retry_and_finalize_reverse_outline(
         let final_result = run_reverse_outline_final(
             &task_app,
             &spawned_run_id,
-            &reverse_outline_retry_request_for_stage(
-                &request,
-                request.long_final_config.as_ref(),
-            ),
+            &reverse_outline_retry_request_for_stage(&request, request.long_final_config.as_ref()),
             &ordered,
         )
         .await;
@@ -2998,14 +3024,19 @@ async fn run_reverse_outline_distributed(
                     }
                 })?;
             let max_tokens = request.max_output_tokens.unwrap_or(2048);
-            let summary =
-                call_reverse_outline_llm(&client, &request, &system_prompt, &user_prompt, max_tokens)
-                    .await
-                    .map_err(|error| ReverseOutlineBatchError {
-                        index: batch.index,
-                        range: batch.range.clone(),
-                        error,
-                    })?;
+            let summary = call_reverse_outline_llm(
+                &client,
+                &request,
+                &system_prompt,
+                &user_prompt,
+                max_tokens,
+            )
+            .await
+            .map_err(|error| ReverseOutlineBatchError {
+                index: batch.index,
+                range: batch.range.clone(),
+                error,
+            })?;
             Ok::<(usize, Value), ReverseOutlineBatchError>((
                 batch.index,
                 json!({
@@ -3088,7 +3119,8 @@ async fn run_reverse_outline_final(
     let final_request =
         reverse_outline_request_for_stage(request, request.long_final_config.as_ref());
     let system_prompt_override = final_request.system_prompt.as_deref();
-    let (system_prompt, user_prompt) = long_final_prompt(&ordered_summaries, system_prompt_override)?;
+    let (system_prompt, user_prompt) =
+        long_final_prompt(&ordered_summaries, system_prompt_override)?;
     let max_tokens = final_request.max_output_tokens.unwrap_or(8192);
     call_reverse_outline_llm_stream(
         app,
@@ -3146,10 +3178,17 @@ async fn run_reverse_outline_analysis_task(
                 message: Some("正在生成短篇反向大纲".to_string()),
             },
         );
-        let (system_prompt, user_prompt) = short_reverse_outline_prompt(&text, system_prompt_override);
+        let (system_prompt, user_prompt) =
+            short_reverse_outline_prompt(&text, system_prompt_override);
         let max_tokens = short_request.max_output_tokens.unwrap_or(4096);
-        match call_reverse_outline_llm(&client, &short_request, &system_prompt, &user_prompt, max_tokens)
-            .await
+        match call_reverse_outline_llm(
+            &client,
+            &short_request,
+            &system_prompt,
+            &user_prompt,
+            max_tokens,
+        )
+        .await
         {
             Ok(content) => ReverseOutlineOutcome::Success(content),
             Err(e) => ReverseOutlineOutcome::Success(e),
@@ -3192,12 +3231,12 @@ mod tests {
         build_long_reverse_outline_batches, build_long_reverse_outline_segments,
         build_openai_background_body, build_openai_reverse_outline_body,
         build_short_reverse_outline_text, canonical_json_response, clean_json_response,
-        format_reverse_outline_send_error,
-        long_final_prompt, long_summary_prompt, parse_background_character_card_response, parse_background_stage_one_response,
+        format_reverse_outline_send_error, long_final_prompt, long_summary_prompt,
+        parse_background_character_card_response, parse_background_stage_one_response,
         resolve_reverse_outline_sources, reverse_outline_char_count,
-        sanitize_reverse_outline_title, save_reverse_outline_for_root, short_reverse_outline_prompt,
-        ReverseOutlineSegment,
-        ReverseOutlineSourceDoc, ReverseOutlineSummaryBatch,
+        sanitize_reverse_outline_title, save_reverse_outline_for_root,
+        short_reverse_outline_prompt, ReverseOutlineSegment, ReverseOutlineSourceDoc,
+        ReverseOutlineSummaryBatch,
     };
     use crate::models::AnalyzeMemoryRequest;
     use serde_json::Value;
@@ -3415,8 +3454,14 @@ plain text
             parsed["message"].as_str().unwrap(),
             "模型没有返回合法 JSON，请重新分析：模型没有返回“莱姆斯”的有效角色卡名称"
         );
-        assert!(parsed["rawOutput"].as_str().unwrap().contains("chatcmpl-test"));
-        assert!(parsed["rawOutput"].as_str().unwrap().contains("finish_reason"));
+        assert!(parsed["rawOutput"]
+            .as_str()
+            .unwrap()
+            .contains("chatcmpl-test"));
+        assert!(parsed["rawOutput"]
+            .as_str()
+            .unwrap()
+            .contains("finish_reason"));
     }
 
     #[test]
@@ -3498,7 +3543,10 @@ plain text
         );
 
         assert_eq!(body["enable_thinking"], Value::Bool(true));
-        assert_eq!(body["reasoning_effort"], Value::String("medium".to_string()));
+        assert_eq!(
+            body["reasoning_effort"],
+            Value::String("medium".to_string())
+        );
     }
 
     #[test]

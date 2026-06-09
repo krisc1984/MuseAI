@@ -34,6 +34,12 @@ import {
   defaultBackgroundCharacterCardPrompt,
   defaultStoryAgentPrompt,
   defaultStoryDynamicAgentPrompt,
+  defaultBookTravelMaterialAssemblerPrompt,
+  defaultBookTravelEntryDirectorPrompt,
+  defaultBookTravelPlotPlannerPrompt,
+  defaultBookTravelSceneWriterPrompt,
+  defaultBookTravelMemoryKeeperPrompt,
+  defaultBookTravelEndingJudgePrompt,
   defaultChatArchivePrompt,
   defaultStoryArchivePrompt,
 } from '../stores/useSettingsStore';
@@ -529,6 +535,16 @@ const Settings: React.FC = () => {
             { key: 'partner-chat-config', href: '#partner-chat-config', title: '聊天页设置' },
             { key: 'story-agent-config', href: '#story-agent-config', title: '冒险页设置' },
             { key: 'bond-config', href: '#bond-config', title: '羁绊页设置' },
+          ]}
+        />
+        <Divider style={{ margin: '12px 16px 12px -8px', borderColor: '#eae6df', minWidth: 'auto', width: 'calc(100% - 8px)' }} />
+        <Anchor
+          affix={false}
+          getContainer={() => document.getElementById('settings-scroll-container') as HTMLElement}
+          onClick={(e) => e.preventDefault()}
+          items={[
+            { key: 'book-travel-material-config', href: '#book-travel-material-config', title: '素材页设置' },
+            { key: 'book-travel-config', href: '#book-travel-config', title: '穿书页设置' },
           ]}
         />
       </div>
@@ -1062,6 +1078,88 @@ const Settings: React.FC = () => {
               helpText="此提示词用于冒险页点击「封存记忆」时，AI 分析整场冒险并提炼关系设定变化、关键事件与建议会话标题。"
             />
           </section>
+
+          <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
+
+          {/* 素材页设置区域 */}
+          <section id="book-travel-material-config" style={{ marginBottom: 48 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+              <BookOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>素材页设置</Title>
+            </div>
+
+            <AgentSettingCard
+              title="穿书素材装配师"
+              agentId="bookTravelMaterialAssembler"
+              defaultPrompt={defaultBookTravelMaterialAssemblerPrompt}
+              currentPrompt={store.bookTravelMaterialAssemblerPrompt}
+              onSavePrompt={store.setBookTravelMaterialAssemblerPrompt}
+              onResetPrompt={store.resetBookTravelMaterialAssemblerPrompt}
+              helpText="此提示词用于把已选大纲、世界书和角色卡整理成穿书运行所需的结构化世界模型。"
+            />
+
+            <AgentSettingCard
+              title="穿书入场导演"
+              agentId="bookTravelEntryDirector"
+              defaultPrompt={defaultBookTravelEntryDirectorPrompt}
+              currentPrompt={store.bookTravelEntryDirectorPrompt}
+              onSavePrompt={store.setBookTravelEntryDirectorPrompt}
+              onResetPrompt={store.resetBookTravelEntryDirectorPrompt}
+              helpText="此提示词用于生成穿书入口和用户可选身份，帮助用户进入所选小说世界。"
+            />
+          </section>
+
+          <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
+
+          {/* 穿书页设置区域 */}
+          <section id="book-travel-config" style={{ marginBottom: 48 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+              <CompassOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>穿书页设置</Title>
+            </div>
+
+            <AgentSettingCard
+              title="穿书剧情规划师"
+              agentId="bookTravelPlotPlanner"
+              defaultPrompt={defaultBookTravelPlotPlannerPrompt}
+              currentPrompt={store.bookTravelPlotPlannerPrompt}
+              onSavePrompt={store.setBookTravelPlotPlannerPrompt}
+              onResetPrompt={store.resetBookTravelPlotPlannerPrompt}
+              helpText="此提示词用于分类用户输入、规划换场状态变化，并保持剧情因果。"
+            />
+
+            <AgentSettingCard
+              title="穿书场景写手"
+              agentId="bookTravelSceneWriter"
+              defaultPrompt={defaultBookTravelSceneWriterPrompt}
+              currentPrompt={store.bookTravelSceneWriterPrompt}
+              onSavePrompt={store.setBookTravelSceneWriterPrompt}
+              onResetPrompt={store.resetBookTravelSceneWriterPrompt}
+              helpText="此提示词用于生成当前场景、节拍、选项和沉浸式中文叙事。"
+            />
+
+            <AgentSettingCard
+              title="穿书记忆整理员"
+              agentId="bookTravelMemoryKeeper"
+              defaultPrompt={defaultBookTravelMemoryKeeperPrompt}
+              currentPrompt={store.bookTravelMemoryKeeperPrompt}
+              onSavePrompt={store.setBookTravelMemoryKeeperPrompt}
+              onResetPrompt={store.resetBookTravelMemoryKeeperPrompt}
+              helpText="此提示词用于压缩长线穿书历史，保留关键选择、关系变化和未解决伏笔。"
+            />
+
+            <AgentSettingCard
+              title="穿书结局裁判"
+              agentId="bookTravelEndingJudge"
+              defaultPrompt={defaultBookTravelEndingJudgePrompt}
+              currentPrompt={store.bookTravelEndingJudgePrompt}
+              onSavePrompt={store.setBookTravelEndingJudgePrompt}
+              onResetPrompt={store.resetBookTravelEndingJudgePrompt}
+              helpText="此提示词用于判断结局条件，并生成最终结局、世界线名称和偏离度总结。"
+            />
+          </section>
+
+          <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
 
         </div>
       </div>

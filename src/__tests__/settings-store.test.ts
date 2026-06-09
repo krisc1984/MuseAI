@@ -14,6 +14,12 @@ import {
   defaultBackgroundCharacterCardPrompt,
   defaultStoryAgentPrompt,
   defaultStoryDynamicAgentPrompt,
+  defaultBookTravelMaterialAssemblerPrompt,
+  defaultBookTravelEntryDirectorPrompt,
+  defaultBookTravelPlotPlannerPrompt,
+  defaultBookTravelSceneWriterPrompt,
+  defaultBookTravelMemoryKeeperPrompt,
+  defaultBookTravelEndingJudgePrompt,
   useSettingsStore,
 } from '../stores/useSettingsStore';
 
@@ -134,5 +140,53 @@ describe('Settings store default exports', () => {
     });
     expect(defaultBackgroundWorldBookPrompt).toContain('世界观与人物设定专家');
     expect(defaultBackgroundCharacterCardPrompt).toContain('人物设定专家');
+  });
+
+  it('should define book-travel role configs and default prompts', () => {
+    const { agentConfigs } = useSettingsStore.getState();
+
+    expect(agentConfigs.bookTravelMaterialAssembler).toEqual({
+      temperature: 0,
+      maxOutputTokens: 8192,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.bookTravelEntryDirector).toEqual({
+      temperature: 0.6,
+      maxOutputTokens: 4096,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.bookTravelPlotPlanner).toEqual({
+      temperature: 0.2,
+      maxOutputTokens: 8192,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.bookTravelSceneWriter).toEqual({
+      temperature: 0.8,
+      maxOutputTokens: 8192,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.bookTravelMemoryKeeper).toEqual({
+      temperature: 0.2,
+      maxOutputTokens: 4096,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+    expect(agentConfigs.bookTravelEndingJudge).toEqual({
+      temperature: 0.3,
+      maxOutputTokens: 8192,
+      maxContextTokens: 128000,
+      thinkingDepth: 'off',
+    });
+
+    expect(defaultBookTravelMaterialAssemblerPrompt).toContain('穿书素材装配师');
+    expect(defaultBookTravelEntryDirectorPrompt).toContain('穿书入场导演');
+    expect(defaultBookTravelPlotPlannerPrompt).toContain('穿书剧情规划师');
+    expect(defaultBookTravelSceneWriterPrompt).toContain('穿书场景写手');
+    expect(defaultBookTravelMemoryKeeperPrompt).toContain('穿书记忆整理员');
+    expect(defaultBookTravelEndingJudgePrompt).toContain('穿书结局裁判');
   });
 });

@@ -66,6 +66,7 @@ const MobileStory: React.FC = () => {
 
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSavingConversation, setIsSavingConversation] = useState(false);
   const [archiveAnalyses, setArchiveAnalyses] = useState<Record<string, any>>({});
   const [hasStartedAnalysis, setHasStartedAnalysis] = useState(false);
   const [tempSelectedCardIds, setTempSelectedCardIds] = useState<string[]>([]);
@@ -140,6 +141,32 @@ const MobileStory: React.FC = () => {
     } catch (e) {
       console.error('保存故事会话失败:', e);
       return false;
+    }
+  };
+
+  const handleSaveConversation = async () => {
+    if (messages.length === 0 || isStreaming || isSessionArchived) {
+      message.warning('当前无可保存的对话内容');
+      return;
+    }
+    setIsSavingConversation(true);
+    try {
+      const chatHistoryText = messages
+        .filter(m => m.role === 'user' || m.role === 'agent')
+        .map(m => `${m.role === 'user' ? '我' : '故事旁白与NPC'}: ${m.content.replace(/\[\[THINKING:[^\]]+\]\]/g, '').trim()}`)
+        .join('\n\n');
+      const res = await appInvoke<{ title: string }>('summarize_text', {
+        request: { text: chatHistoryText }
+      });
+      const generatedTitle = res.title;
+      setSessionTitle(generatedTitle);
+      await saveCurrentSession();
+      message.success('对话已保存');
+    } catch (err) {
+      console.error('保存对话失败:', err);
+      message.error(`保存对话失败：${String(err)}`);
+    } finally {
+      setIsSavingConversation(false);
     }
   };
 
@@ -283,6 +310,21 @@ const MobileStory: React.FC = () => {
           const payload = event.payload;
           if (payload.runId !== runId) return;
 
+          if (payload.eventType === 'context_compacted' && payload.contextCompaction) {
+            setContextCompaction(payload.contextCompaction);
+            return;
+          }
+
+          if (payload.eventType === 'error') {
+            currentThinkingIdRef.current = null;
+            setIsStreaming(false);
+            setActiveRun({ runId: null, messageId: null });
+          } else if (payload.eventType === 'done') {
+            currentThinkingIdRef.current = null;
+            setIsStreaming(false);
+            setActiveRun({ runId: null, messageId: null });
+          }
+
           setMessages((prev) => {
             const msgIndex = prev.findIndex(m => m.id === agentMsgId);
             if (msgIndex === -1) return prev;
@@ -343,20 +385,8 @@ const MobileStory: React.FC = () => {
                   status: 'success',
                 };
               }
-            } else if (payload.eventType === 'context_compacted' && payload.contextCompaction) {
-              setContextCompaction(payload.contextCompaction);
             } else if (payload.eventType === 'error') {
-              currentThinkingIdRef.current = null;
-              setIsStreaming(false);
-              setActiveRun({ runId: null, messageId: null });
               content += payload.message ? `\n\n[冒险故障] ${payload.message}` : '\n\n[冒险故障] 请求大模型失败';
-            } else if (payload.eventType === 'done') {
-              currentThinkingIdRef.current = null;
-              setIsStreaming(false);
-              setActiveRun({ runId: null, messageId: null });
-              setTimeout(() => {
-                saveCurrentSession();
-              }, 0);
             }
 
             const updated = [...prev];
@@ -429,7 +459,6 @@ const MobileStory: React.FC = () => {
       setIsStreaming(false);
       setActiveRun({ runId: null, messageId: null });
       message.success('已暂停冒险生成');
-      saveCurrentSession();
     } catch (e) {
       console.error('停止冒险失败:', e);
     }
@@ -966,14 +995,26 @@ const MobileStory: React.FC = () => {
 
               {/* Archive triggers */}
               {messages.length > 0 && !isSessionArchived && !isStreaming && (
-                <Button
-                  type="link"
-                  icon={<SaveOutlined />}
-                  onClick={handleStartArchive}
-                  style={{ color: '#d97757', padding: 0, fontSize: '13px', alignSelf: 'flex-end' }}
-                >
-                  提炼记忆并锁定存档
-                </Button>
+                <div style={{ display: 'flex', gap: '12px', alignSelf: 'flex-end' }}>
+                  <Button
+                    type="link"
+                    loading={isSavingConversation}
+                    disabled={isSavingConversation}
+                    icon={<SaveOutlined />}
+                    onClick={() => void handleSaveConversation()}
+                    style={{ color: '#d97757', padding: 0, fontSize: '13px' }}
+                  >
+                    保存对话
+                  </Button>
+                  <Button
+                    type="link"
+                    icon={<SaveOutlined />}
+                    onClick={handleStartArchive}
+                    style={{ color: '#d97757', padding: 0, fontSize: '13px' }}
+                  >
+                    提炼记忆并锁定存档
+                  </Button>
+                </div>
               )}
               {isSessionArchived && (
                 <div style={{ fontSize: '11px', color: '#8c8880', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '4px', alignItems: 'center' }}>

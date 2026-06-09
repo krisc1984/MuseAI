@@ -1,3 +1,4 @@
+mod book_travel;
 mod crawler;
 mod fs_commands;
 mod mobile_server;
@@ -19,6 +20,7 @@ use std::sync::OnceLock;
 use tokio::sync::oneshot;
 
 pub use agent::sessions::*;
+pub use book_travel::*;
 pub use commands::fs::*;
 pub use commands::skills::*;
 pub use commands::versions::*;
@@ -237,6 +239,20 @@ pub fn run() {
             generate_background_items,
             generate_background_stage_one,
             generate_background_character_card,
+            assemble_book_travel_materials,
+            generate_book_travel_entry_setup,
+            start_assemble_book_travel_materials_stream,
+            start_generate_book_travel_entry_setup_stream,
+            start_plan_book_travel_scene_stream,
+            start_write_book_travel_change_scene_stream,
+            start_write_book_travel_insert_beat_stream,
+            stop_book_travel_stream,
+            classify_book_travel_input,
+            plan_book_travel_scene,
+            summarize_book_travel_memory,
+            judge_book_travel_ending,
+            write_book_travel_insert_beat,
+            write_book_travel_change_scene,
             cancel_background_task,
             start_generate_background_items_stream,
             optimize_character_memories,

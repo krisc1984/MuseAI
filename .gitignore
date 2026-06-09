@@ -53,6 +53,6 @@ Thumbs.db
 openspec/
 AGENTS.md
 DESIGN.md
-prompts.md
+prompts/
 PRODUCT.md
 .workbuddy/memory/

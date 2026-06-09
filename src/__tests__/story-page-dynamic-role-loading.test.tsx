@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import Story from '../pages/Story';
+import Adventure from '../pages/Adventure';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
@@ -96,8 +96,11 @@ describe('Story dynamic role loading page', () => {
   });
 
   it('renders the dynamic loading switch and starts static adventures without tools', async () => {
-    render(<Story />);
+    render(<Adventure />);
 
+    expect(screen.getByText('冒险页')).toBeInTheDocument();
+    expect(screen.queryByText('普通冒险')).not.toBeInTheDocument();
+    expect(screen.queryByText('选择穿书素材')).not.toBeInTheDocument();
     expect(screen.getByText('角色卡动态加载')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /开启冒险旅程/ }));
 
@@ -120,7 +123,7 @@ describe('Story dynamic role loading page', () => {
 
   it('starts dynamic adventures with role_play and keeps character/user info in Story prompt', async () => {
     resetStores(true);
-    render(<Story />);
+    render(<Adventure />);
 
     fireEvent.click(screen.getByRole('button', { name: /开启冒险旅程/ }));
 
@@ -175,7 +178,7 @@ describe('Story dynamic role loading page', () => {
       dynamicRoleLoadingEnabled: true,
     });
 
-    render(<Story />);
+    render(<Adventure />);
 
     expect(screen.getByText('陆雪莹')).toBeInTheDocument();
     expect(screen.getByText('别乱走，跟紧我。')).toBeInTheDocument();
@@ -205,7 +208,7 @@ describe('Story dynamic role loading page', () => {
       dynamicRoleLoadingEnabled: true,
     });
 
-    render(<Story />);
+    render(<Adventure />);
 
     expect(screen.queryByText('正在执行工具')).not.toBeInTheDocument();
     expect(screen.queryByText('角色暂未回应。')).not.toBeInTheDocument();
