@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox } from 'antd';
+import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio } from 'antd';
 import {
   HistoryOutlined,
   ReloadOutlined,
@@ -23,13 +23,12 @@ import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { useBookTravelStore } from '../stores/useBookTravelStore';
-import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
+import { Message, AgentSessionSummary, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
 import {
   buildStoryModelMessages,
   compileStorySystemPrompt,
   getStoryAllowedTools,
 } from './storyAgent';
-import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
 
 interface ChatStreamEvent {
   runId: string;
@@ -56,7 +55,11 @@ const estimateContextUsage = (systemPrompt: string, messages: Message[], draft: 
 };
 
 
-const cleanAndParseJSON = (rawStr: string): any => {
+const cleanAndParseJSON = (rawStr: unknown): any => {
+  if (typeof rawStr !== 'string') {
+    if (rawStr && typeof rawStr === 'object') return rawStr;
+    throw new TypeError(`Expected string or object, got ${typeof rawStr}`);
+  }
   let cleaned = rawStr.trim();
   if (cleaned.startsWith('`')) {
     const lines = cleaned.split('\n');
@@ -118,16 +121,16 @@ const Story: React.FC = () => {
     input, setInput,
     inputMode, setInputMode,
     isStreaming, setIsStreaming,
-    selectedWorldBookId, setSelectedWorldBookId,
-    selectedCharacterCardIds, setSelectedCharacterCardIds,
-    sessions, setSessions,
-    sessionId, setSessionId,
+    selectedWorldBookId,
+    selectedCharacterCardIds,
+    sessionId,
     sessionTitle, setSessionTitle,
     activeRun, setActiveRun,
-    isSessionArchived, setIsSessionArchived,
+    isSessionArchived,
     contextCompaction, setContextCompaction,
-    dynamicRoleLoadingEnabled, setDynamicRoleLoadingEnabled,
-    createNewSession
+    dynamicRoleLoadingEnabled,
+    createNewSession,
+    setSessions,
   } = useStoryStore();
 
   const bookTravelStore = useBookTravelStore();
@@ -221,7 +224,7 @@ const Story: React.FC = () => {
   };
 
 
-  const { worldBooks, characterCards, updateItemFields } = usePartnerStore();
+  const { worldBooks, characterCards } = usePartnerStore();
   const { userInfo: partnerChatUserInfo } = usePartnerChatStore();
   const settings = useSettingsStore();
 
@@ -236,20 +239,6 @@ const Story: React.FC = () => {
   const selectedCharacterCardIdsRef = useRef(selectedCharacterCardIds);
   const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
 
-  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [archiveAnalyses, setArchiveAnalyses] = useState<Record<string, any>>({});
-  const [selectedTargetCardId, setSelectedTargetCardId] = useState<string>('');
-
-  const [editedTitle, setEditedTitle] = useState('');
-  const [editedRelationTypes, setEditedRelationTypes] = useState<Record<string, string>>({});
-  const [editedRelationModels, setEditedRelationModels] = useState<Record<string, string>>({});
-  const [editedRelationBottomLines, setEditedRelationBottomLines] = useState<Record<string, string>>({});
-  const [editedEventsMap, setEditedEventsMap] = useState<Record<string, string>>({});
-
-
-  const [tempSelectedCardIds, setTempSelectedCardIds] = useState<string[]>([]);
-  const [hasStartedAnalysis, setHasStartedAnalysis] = useState(false);
 
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -984,175 +973,6 @@ const Story: React.FC = () => {
     }
   };
 
-  const openSession = async (id: string) => {
-    try {
-      const session = await invoke<AgentSessionRecord>('load_agent_session', { id });
-      activeRunRef.current = { runId: null, messageId: null };
-      setActiveRun({ runId: null, messageId: null });
-      setSessionId(session.id);
-      setSessionTitle(session.title);
-      setMessages(session.messages);
-      setSelectedWorldBookId(session.selectedWorldBookId ?? null);
-      setSelectedCharacterCardIds(session.characterCardIds ?? []);
-      setDynamicRoleLoadingEnabled(session.dynamicRoleLoadingEnabled ?? false);
-      contextCompactionRef.current = session.contextCompaction ?? null;
-      setContextCompaction(session.contextCompaction ?? null);
-      setIsStreaming(false);
-      setInput('');
-      setIsSessionArchived(session.isArchived ?? false);
-      scrollToBottomOnce();
-    } catch (err) {
-      console.error('打开故事会话失败:', err);
-    }
-  };
-
-  const handleDeleteSession = async (id: string) => {
-    try {
-      await invoke('delete_agent_session', { id });
-      message.success('已删除该冒险记录');
-      if (id === sessionIdRef.current) {
-        createNewSession();
-      }
-      await refreshSessions();
-    } catch (err) {
-      console.error('删除会话失败:', err);
-      message.error('删除会话失败');
-    }
-  };
-
-  const handleArchiveMemory = async () => {
-    if (messages.length === 0 || isStreaming || isSessionArchived) return;
-
-    if (selectedCards.length === 0) {
-      message.warning('当前冒险尚未绑定任何角色卡，无法封存记忆！');
-      return;
-    }
-
-    setTempSelectedCardIds(selectedCards.map(c => c.id));
-    setHasStartedAnalysis(false);
-    setArchiveAnalyses({});
-    setIsArchiveModalOpen(true);
-  };
-
-  const startAnalyzingSelectedCards = async () => {
-    if (tempSelectedCardIds.length === 0) return;
-
-    setIsAnalyzing(true);
-    setHasStartedAnalysis(true);
-    setSelectedTargetCardId(tempSelectedCardIds[0]);
-
-    const chatHistoryText = messages
-      .filter(m => m.role === 'user' || m.role === 'agent')
-      .map(m => {
-        const sender = m.role === 'user' ? '我' : '故事旁白与NPC';
-        const cleanContent = m.content.replace(/\[\[THINKING:[^\]]+\]\]/g, '').trim();
-        return `${sender}: ${cleanContent}`;
-      })
-      .filter(line => line.split(': ')[1] !== '')
-      .join('\n\n');
-
-    try {
-      const archiveConfig = settings.agentConfigs?.storyArchive || {};
-      const filteredCards = selectedCards.filter(cc => tempSelectedCardIds.includes(cc.id));
-      const promises = filteredCards.map(async (card) => {
-        const resultStr = await invoke<string | Record<string, any>>('analyze_character_memory', {
-          request: {
-            modelInterface: settings.modelInterface,
-            baseUrl: settings.llmBaseUrl,
-            apiKey: settings.llmApiKey,
-            model: settings.llmModel,
-            temperature: archiveConfig.temperature ?? 0.3,
-            maxOutputTokens: archiveConfig.maxOutputTokens ?? 32000,
-            thinkingDepth: archiveConfig.thinkingDepth ?? 'off',
-            systemPrompt: settings.storyArchivePrompt || undefined,
-            chatHistory: chatHistoryText,
-            targetCharacterName: card.name,
-            targetCharacterContent: card.content,
-            currentUserRelationType: card.fields?.userRelationType || '',
-            currentUserInteractionModel: card.fields?.userInteractionModel || '',
-            currentUserRelationBottomLine: card.fields?.userRelationBottomLine || '',
-            currentEvents: card.fields?.keyEvents || '暂无共同经历的关键事件。'
-          }
-        });
-        const analysis = parseArchiveAnalysisResponse(resultStr);
-        return { cardId: card.id, analysis };
-      });
-
-      const results = await Promise.all(promises);
-      const analyses: Record<string, any> = {};
-      const relationTypes: Record<string, string> = {};
-      const relationModels: Record<string, string> = {};
-      const relationBottomLines: Record<string, string> = {};
-      const events: Record<string, string> = {};
-      let firstSessionTitle = '';
-
-      for (const res of results) {
-        analyses[res.cardId] = res.analysis;
-        relationTypes[res.cardId] = res.analysis.userRelationType || '';
-        relationModels[res.cardId] = res.analysis.userInteractionModel || '';
-        relationBottomLines[res.cardId] = res.analysis.userRelationBottomLine || '';
-        events[res.cardId] = res.analysis.keyEvents || '';
-        if (!firstSessionTitle) {
-          firstSessionTitle = res.analysis.sessionTitle || '';
-        }
-      }
-
-      setArchiveAnalyses(analyses);
-      setEditedRelationTypes(relationTypes);
-      setEditedRelationModels(relationModels);
-      setEditedRelationBottomLines(relationBottomLines);
-      setEditedEventsMap(events);
-      setEditedTitle(firstSessionTitle || sessionTitle || '未命名故事');
-    } catch (err) {
-      console.error('故事记忆分析失败:', err);
-      message.error(`故事记忆分析失败：${String(err)}`);
-      setIsArchiveModalOpen(false);
-      setHasStartedAnalysis(false);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handleTargetCardChange = (cardId: string) => {
-    setSelectedTargetCardId(cardId);
-  };
-
-  const handleConfirmArchive = async () => {
-    try {
-      // 1. Update all character card fields
-      const filteredCards = selectedCards.filter(c => tempSelectedCardIds.includes(c.id));
-      for (const card of filteredCards) {
-        const relationType = editedRelationTypes[card.id] || '';
-        const relationModel = editedRelationModels[card.id] || '';
-        const relationBottomLine = editedRelationBottomLines[card.id] || '';
-        const events = editedEventsMap[card.id] || '';
-        updateItemFields(card.id, 'character_card', {
-          userRelationType: relationType,
-          userInteractionModel: relationModel,
-          userRelationBottomLine: relationBottomLine,
-          keyEvents: events
-        });
-      }
-
-      // 2. Archive session state
-      setIsSessionArchived(true);
-      const finalTitle = editedTitle.trim() || '未命名故事';
-      setSessionTitle(finalTitle);
-      sessionTitleRef.current = finalTitle;
-      isSessionArchivedRef.current = true;
-
-      // 3. Update backend session title and persist
-      await invoke('update_agent_session_title', { id: sessionIdRef.current, title: finalTitle });
-      await saveCurrentSession();
-
-      message.success('冒险记忆成功封存到选中的角色卡！本局会话已锁定归档。');
-      setIsArchiveModalOpen(false);
-    } catch (err) {
-      console.error('封存故事记忆失败:', err);
-      message.error(`封存故事记忆失败：${String(err)}`);
-    }
-  };
-
   // Context Stats
   const contextStats = estimateContextUsage(effectiveSystemPrompt, messages, input);
   const maxContext = storyAgentConfig.maxContextTokens ?? 200000;
@@ -1185,181 +1005,6 @@ const Story: React.FC = () => {
 
   return (
     <div className="agent-chat" style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#faf9f5' }}>
-
-      {/* Archive Memory Modal */}
-      <Modal
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e', fontSize: '18px', fontWeight: 600 }}>
-            <FileProtectOutlined style={{ color: '#d97757' }} />
-            <span>封存冒险记忆与设定同步</span>
-          </div>
-        }
-        open={isArchiveModalOpen}
-        onCancel={() => !isAnalyzing && setIsArchiveModalOpen(false)}
-        width={720}
-        styles={{ body: { padding: '16px 24px' } }}
-        footer={
-          !hasStartedAnalysis ? (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <Button onClick={() => setIsArchiveModalOpen(false)}>取消</Button>
-              <Button
-                type="primary"
-                disabled={tempSelectedCardIds.length === 0}
-                onClick={startAnalyzingSelectedCards}
-                style={{
-                  backgroundColor: tempSelectedCardIds.length > 0 ? '#d97757' : undefined,
-                  borderColor: tempSelectedCardIds.length > 0 ? '#d97757' : undefined,
-                  borderRadius: '6px',
-                  color: tempSelectedCardIds.length > 0 ? '#ffffff' : undefined
-                }}
-              >
-                开始分析封存
-              </Button>
-            </div>
-          ) : isAnalyzing ? null : (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <Button onClick={() => setIsArchiveModalOpen(false)}>取消</Button>
-              <Button
-                type="primary"
-                onClick={handleConfirmArchive}
-                style={{
-                  backgroundColor: '#d97757',
-                  borderColor: '#d97757',
-                  borderRadius: '6px',
-                  color: '#ffffff'
-                }}
-              >
-                确认同步并归档
-              </Button>
-            </div>
-          )
-        }
-      >
-        {!hasStartedAnalysis ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '12px 0' }}>
-            <div style={{ fontSize: '14px', color: '#5c5751', fontWeight: 500 }}>
-              请勾选本次封存记忆需要更新的角色卡：
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', padding: '8px 0' }}>
-              {selectedCards.map((card) => {
-                const isChecked = tempSelectedCardIds.includes(card.id);
-                return (
-                  <Checkbox
-                    key={card.id}
-                    checked={isChecked}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setTempSelectedCardIds((prev) =>
-                        checked ? [...prev, card.id] : prev.filter((id) => id !== card.id)
-                      );
-                    }}
-                    style={{
-                      margin: 0,
-                      padding: '8px 16px',
-                      border: isChecked ? '1px solid #d97757' : '1px solid #eae6df',
-                      borderRadius: '8px',
-                      backgroundColor: isChecked ? '#fff7f2' : '#faf9f5',
-                      color: isChecked ? '#d97757' : '#5c5751',
-                      transition: 'all 0.2s ease',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <span style={{ fontSize: '13px', fontWeight: 500 }}>{card.name}</span>
-                  </Checkbox>
-                );
-              })}
-            </div>
-          </div>
-        ) : isAnalyzing ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 0', gap: '16px' }}>
-            <Spin size="large" />
-            <div style={{ color: '#8c8882', fontSize: '14px' }}>
-              正在深度提炼并收拢本次冒险中的关系与里程碑经历...
-            </div>
-          </div>
-        ) : archiveAnalyses[selectedTargetCardId] ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
-            {/* Target Character Card Sync Selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#faf6f0', padding: '12px 16px', borderRadius: '8px', border: '1px solid #f2e8dc' }}>
-              <strong style={{ color: '#33312e', fontSize: '14px' }}>选择要同步的角色卡：</strong>
-              <Select
-                value={selectedTargetCardId}
-                onChange={handleTargetCardChange}
-                style={{ width: 220 }}
-                options={selectedCards.filter(c => tempSelectedCardIds.includes(c.id)).map(c => ({ value: c.id, label: c.name }))}
-              />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              <div style={{ border: '1px solid rgba(0,0,0,0.04)', padding: '12px', borderRadius: '6px', background: '#fafafa' }}>
-                <div style={{ color: '#d97757', fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>关系变化提炼</div>
-                <div style={{ fontSize: '13px', color: '#33312e', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{archiveAnalyses[selectedTargetCardId]?.relationChanges}</div>
-              </div>
-              <div style={{ border: '1px solid rgba(0,0,0,0.04)', padding: '12px', borderRadius: '6px', background: '#fafafa' }}>
-                <div style={{ color: '#d97757', fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>里程碑事件提炼</div>
-                <div style={{ fontSize: '13px', color: '#33312e', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{archiveAnalyses[selectedTargetCardId]?.eventChanges}</div>
-              </div>
-            </div>
-
-            <div style={{ height: '1px', background: 'rgba(0,0,0,0.03)' }} />
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>本局冒险标题</div>
-                <Input
-                  value={editedTitle}
-                  onChange={(e) => setEditedTitle(e.target.value)}
-                  placeholder="冒险标题"
-                  style={{ borderRadius: '6px', borderColor: '#eae6df' }}
-                />
-              </div>
-
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户关系类型（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
-                <Input
-                  value={editedRelationTypes[selectedTargetCardId] || ''}
-                  onChange={(e) => setEditedRelationTypes(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))}
-                  placeholder="与用户关系类型..."
-                  style={{ borderRadius: '6px', borderColor: '#eae6df' }}
-                />
-              </div>
-
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户相处模式（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
-                <Input.TextArea
-                  value={editedRelationModels[selectedTargetCardId] || ''}
-                  onChange={(e) => setEditedRelationModels(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))}
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                  placeholder="与用户相处模式..."
-                  style={{ borderRadius: '6px', borderColor: '#eae6df' }}
-                />
-              </div>
-
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户关系底线（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
-                <Input.TextArea
-                  value={editedRelationBottomLines[selectedTargetCardId] || ''}
-                  onChange={(e) => setEditedRelationBottomLines(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))}
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                  placeholder="与用户关系底线..."
-                  style={{ borderRadius: '6px', borderColor: '#eae6df' }}
-                />
-              </div>
-
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的关键经历记录（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
-                <Input.TextArea
-                  value={editedEventsMap[selectedTargetCardId] || ''}
-                  onChange={(e) => setEditedEventsMap(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))}
-                  autoSize={{ minRows: 4, maxRows: 8 }}
-                  style={{ borderRadius: '6px', borderColor: '#eae6df' }}
-                />
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </Modal>
 
       {/* Book Travel Planner Progress Modal */}
       <Modal
@@ -1444,15 +1089,18 @@ const Story: React.FC = () => {
         </div>
 
         <div className="agent-chat__header-actions">
-          {selectedCards.length > 0 && (
-            <Tooltip title={isSessionArchived ? "当前冒险记录已归档封存" : "封存本局冒险记忆并锁定会话"}>
+          {bookTravelStore.scenes.length > 0 && (
+            <Tooltip title="保存当前穿书进度">
               <Button
                 type="text"
-                disabled={isStreaming || isSessionArchived || messages.length === 0}
+                disabled={isStreaming}
                 icon={<FileProtectOutlined />}
-                onClick={handleArchiveMemory}
+                onClick={() => {
+                  bookTravelStore.saveProgress();
+                  message.success('进度已保存');
+                }}
                 style={{
-                  color: (isSessionArchived || messages.length === 0) ? '#8c8882' : '#d97757',
+                  color: isStreaming ? '#8c8882' : '#d97757',
                   fontWeight: 500,
                   fontSize: 13,
                   display: 'inline-flex',
@@ -1460,7 +1108,7 @@ const Story: React.FC = () => {
                   gap: 4
                 }}
               >
-                封存记忆
+                保存进度
               </Button>
             </Tooltip>
           )}
@@ -1471,15 +1119,15 @@ const Story: React.FC = () => {
 
           <Dropdown
             menu={{
-              items: sessions.length > 0
-                ? sessions.map((session) => ({
-                  key: session.id,
+              items: bookTravelStore.savedProgresses.length > 0
+                ? bookTravelStore.savedProgresses.map((progress) => ({
+                  key: progress.id,
                   label: (
                     <div className="agent-session-menu-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 200, padding: '4px 0' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
-                        <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{session.title}</strong>
+                        <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{progress.title}</strong>
                         <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>
-                          {session.savedAt ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(session.savedAt)) : '未保存'}
+                          {new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(progress.savedAt))}
                         </span>
                       </div>
                       <Button
@@ -1489,22 +1137,22 @@ const Story: React.FC = () => {
                         icon={<DeleteOutlined />}
                         onClick={(e) => {
                           e.stopPropagation();
-                          void handleDeleteSession(session.id);
+                          bookTravelStore.deleteSavedProgress(progress.id);
                         }}
                       />
                     </div>
                   ),
                 }))
-                : [{ key: 'empty', disabled: true, label: '暂无历史冒险' }],
+                : [{ key: 'empty', disabled: true, label: '暂无保存的穿书进度' }],
               onClick: ({ key }) => {
-                if (key !== 'empty') void openSession(String(key));
+                if (key !== 'empty') bookTravelStore.loadSavedProgress(String(key));
               },
             }}
             placement="bottomRight"
             trigger={['click']}
           >
-            <Tooltip title="历史记录">
-              <Button type="text" icon={<HistoryOutlined />} onClick={() => void refreshSessions()} />
+            <Tooltip title="穿书保存进度">
+              <Button type="text" icon={<HistoryOutlined />} />
             </Tooltip>
           </Dropdown>
         </div>
@@ -1517,6 +1165,8 @@ const Story: React.FC = () => {
             {/* Turns history */}
             {bookTravelStore.turns.map((turn) => {
               const createdScene = turn.createdSceneId ? bookTravelStore.scenes.find((s) => s.id === turn.createdSceneId) : null;
+              const currentScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
+              const sceneContext = createdScene || currentScene;
               return (
                 <div key={turn.id} style={{ marginBottom: 24 }}>
                   <div style={{ textAlign: 'right', marginBottom: 8 }}>
@@ -1524,26 +1174,26 @@ const Story: React.FC = () => {
                       {turn.userInput}
                     </div>
                   </div>
-                  {createdScene && (
+                  {sceneContext && (
                     <div style={{ marginBottom: 12, background: '#faf6f0', border: '1px solid #f2e8dc', borderRadius: 10, padding: '14px 16px' }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: '#33312e', marginBottom: 6 }}>{createdScene.title}</div>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: '#33312e', marginBottom: 6 }}>{sceneContext.title}</div>
                       <div style={{ fontSize: 12, color: '#8c8882', marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
-                        {createdScene.time && <span>时间：{createdScene.time}</span>}
-                        {createdScene.location && <span>地点：{createdScene.location}</span>}
+                        {sceneContext.time && <span>时间：{sceneContext.time}</span>}
+                        {sceneContext.location && <span>地点：{sceneContext.location}</span>}
                       </div>
-                      {createdScene.summary && (
+                      {createdScene && createdScene.summary && (
                         <div style={{ fontSize: 12, color: '#8c8882', marginBottom: 8, fontStyle: 'italic' }}>
                           {createdScene.summary}
                         </div>
                       )}
-                      {createdScene.currentSituation && (
+                      {sceneContext.currentSituation && (
                         <div style={{ fontSize: 12, color: '#5c5751', marginBottom: 8, background: '#fff', padding: '8px 10px', borderRadius: 6 }}>
-                          <span style={{ color: '#d97757', fontWeight: 600 }}>当前局势：</span>{createdScene.currentSituation}
+                          <span style={{ color: '#d97757', fontWeight: 600 }}>当前局势：</span>{sceneContext.currentSituation}
                         </div>
                       )}
-                      {createdScene.activeCharacters && createdScene.activeCharacters.length > 0 && (
+                      {sceneContext.activeCharacters && sceneContext.activeCharacters.length > 0 && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                          {createdScene.activeCharacters.map((name) => (
+                          {sceneContext.activeCharacters.map((name) => (
                             <Tag key={name} color="#d97757" style={{ borderRadius: 4, margin: 0 }}>{name}</Tag>
                           ))}
                         </div>

@@ -88,6 +88,14 @@ export type BookTravelAssembledMaterialInput = Omit<BookTravelAssembledMaterial,
   updatedAt?: number;
 };
 
+export interface BookTravelSavedProgress {
+  id: string;
+  title: string;
+  savedAt: number;
+  sessionKey: string;
+  snapshot: BookTravelSnapshot;
+}
+
 export interface BookTravelSnapshot {
   selectedOutline: BookTravelMaterial | null;
   selectedWorldBook: BookTravelMaterial | null;
@@ -112,6 +120,7 @@ export interface BookTravelSnapshot {
 interface BookTravelState extends BookTravelSnapshot {
   assembledMaterials: BookTravelAssembledMaterial[];
   selectedMaterialId: string | null;
+  savedProgresses: BookTravelSavedProgress[];
   selectOutline: (outline: BookTravelMaterial | null) => void;
   selectWorldBook: (worldBook: BookTravelMaterial | null) => void;
   setSelectedCharacterCards: (characterCards: BookTravelMaterial[]) => void;
@@ -137,6 +146,9 @@ interface BookTravelState extends BookTravelSnapshot {
   updateAssembledMaterial: (id: string, patch: Partial<BookTravelAssembledMaterialInput>) => void;
   deleteAssembledMaterial: (id: string) => void;
   loadAssembledMaterial: (id: string) => void;
+  saveProgress: (title?: string) => string;
+  deleteSavedProgress: (id: string) => void;
+  loadSavedProgress: (id: string) => void;
   restoreSession: (snapshot: Partial<BookTravelSnapshot>) => void;
   resetSession: () => void;
 }
@@ -185,6 +197,7 @@ export const useBookTravelStore = create<BookTravelState>()(
       ...initialState,
       assembledMaterials: [],
       selectedMaterialId: null,
+      savedProgresses: [],
 
       selectOutline: (selectedOutline) => set({ selectedOutline }),
       selectWorldBook: (selectedWorldBook) => set({ selectedWorldBook }),
@@ -272,6 +285,35 @@ export const useBookTravelStore = create<BookTravelState>()(
         if (!material) return;
         set(loadMaterialIntoSession(material));
       },
+      saveProgress: (title) => {
+        const state = get();
+        const sessionKey = [
+          state.selectedMaterialId || 'none',
+          state.selectedEntryPointId || 'none',
+          state.userCharacter?.name || 'none',
+        ].join('-');
+        const existing = state.savedProgresses.find((p) => p.sessionKey === sessionKey);
+        const id = existing?.id || `book-travel-progress-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const progress: BookTravelSavedProgress = {
+          id,
+          title: title?.trim() || existing?.title || `穿书进度 ${new Date().toLocaleString('zh-CN')}`,
+          savedAt: Date.now(),
+          sessionKey,
+          snapshot: getBookTravelSnapshot(),
+        };
+        set((s) => ({
+          savedProgresses: [progress, ...s.savedProgresses.filter((p) => p.id !== id)],
+        }));
+        return id;
+      },
+      deleteSavedProgress: (id) => set((state) => ({
+        savedProgresses: state.savedProgresses.filter((p) => p.id !== id),
+      })),
+      loadSavedProgress: (id) => {
+        const progress = get().savedProgresses.find((p) => p.id === id);
+        if (!progress) return;
+        set({ ...initialState, ...progress.snapshot });
+      },
       restoreSession: (snapshot) => set({ ...initialState, ...snapshot }),
       resetSession: () => set({ ...initialState, selectedMaterialId: null }),
     }),
@@ -280,6 +322,7 @@ export const useBookTravelStore = create<BookTravelState>()(
       storage: createJSONStorage(() => createDiskStorage('book-travel-store', 'museai-book-travel-storage')),
       partialize: (state) => ({
         assembledMaterials: state.assembledMaterials,
+        savedProgresses: state.savedProgresses,
       }),
     },
   ),
