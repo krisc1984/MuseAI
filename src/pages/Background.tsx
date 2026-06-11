@@ -17,9 +17,11 @@ import {
   LoadingOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  ClockCircleOutlined
+  ClockCircleOutlined,
+  DownloadOutlined,
+  UploadOutlined
 } from '@ant-design/icons';
-import { usePartnerStore, PartnerItem, PartnerItemFields, CustomField, normalizePartnerFields } from '../stores/usePartnerStore';
+import { usePartnerStore, PartnerItem, PartnerItemFields, CustomField, PartnerImportExportType, PartnerItemsPackage, normalizePartnerFields } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
@@ -51,12 +53,15 @@ const Background: React.FC = () => {
     addCharacterCard,
     selectItem,
     deleteItem,
+    deleteWorldBookWithCharacterCards,
     updateItemName,
     updateItemFields,
     updateCharacterCardWorldBook,
     addCustomField,
     updateCustomField,
-    removeCustomField
+    removeCustomField,
+    exportPartnerItemBundle,
+    importPartnerItemsPackages
   } = usePartnerStore();
 
   const settings = useSettingsStore();
@@ -98,6 +103,7 @@ const Background: React.FC = () => {
   const [isMemModalOpen, setIsMemModalOpen] = useState(false);
   const [optimizedEvents, setOptimizedEvents] = useState('');
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [pendingWorldBookDelete, setPendingWorldBookDelete] = useState<PartnerItem | null>(null);
 
   const generateTaskId = useCallback(() => {
     return 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
@@ -566,6 +572,8 @@ const Background: React.FC = () => {
   const [expandedCharacterGroupKeys, setExpandedCharacterGroupKeys] = useState<React.Key[]>([]);
   const tagInputRef = useRef<any>(null);
   const renameInputRef = useRef<any>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingImportTypeRef = useRef<PartnerImportExportType>('world_book');
   const knownCharacterGroupKeysRef = useRef<string[]>([]);
   const hasInitializedCharacterGroupsRef = useRef(false);
 
@@ -600,7 +608,122 @@ const Background: React.FC = () => {
 
   const handleDeleteItem = (id: string, type: 'world_book' | 'character_card', e: React.MouseEvent) => {
     e.stopPropagation();
+    if (type === 'world_book') {
+      const item = worldBooks.find((worldBook) => worldBook.id === id);
+      if (item) {
+        setPendingWorldBookDelete(item);
+      }
+      return;
+    }
     deleteItem(id, type);
+  };
+
+  const handleDeleteWorldBookOnly = () => {
+    if (!pendingWorldBookDelete) return;
+    deleteItem(pendingWorldBookDelete.id, 'world_book');
+    setPendingWorldBookDelete(null);
+  };
+
+  const handleDeleteWorldBookWithCards = () => {
+    if (!pendingWorldBookDelete) return;
+    deleteWorldBookWithCharacterCards(pendingWorldBookDelete.id);
+    setPendingWorldBookDelete(null);
+  };
+
+  const partnerTypeLabel = (type: PartnerImportExportType) => type === 'world_book' ? '世界书' : '角色卡';
+
+  const partnerPackageText = (data: PartnerItemsPackage) => JSON.stringify(data, null, 2);
+
+  const exportFilesForItem = (item: PartnerItem) => {
+    const data = exportPartnerItemBundle(item.type, item.id);
+    if (item.type === 'world_book') {
+      const worldBookPackage = {
+        ...data,
+        characterCards: [],
+      };
+      const characterFiles = data.characterCards.map((card) => ({
+        relativePath: `角色卡/${card.name || '未命名角色卡'}.json`,
+        content: partnerPackageText({
+          ...data,
+          worldBooks: [],
+          characterCards: [card],
+        }),
+      }));
+      return {
+        directoryName: item.name || '未命名世界书',
+        files: [
+          {
+            relativePath: '世界书和角色卡.json',
+            content: partnerPackageText(data),
+          },
+          {
+            relativePath: '世界书.json',
+            content: partnerPackageText(worldBookPackage),
+          },
+          ...characterFiles,
+        ],
+      };
+    }
+
+    return {
+      directoryName: null,
+      files: [
+        {
+          relativePath: `museai-character-card-${item.name || '未命名角色卡'}.json`,
+          content: partnerPackageText(data),
+        },
+      ],
+    };
+  };
+
+  const handleExportPartnerItem = async (item: PartnerItem) => {
+    try {
+      const payload = exportFilesForItem(item);
+      const paths = await invoke<string[]>('export_json_files_to_downloads', {
+        directoryName: payload.directoryName,
+        files: payload.files,
+      });
+      const targetText = item.type === 'world_book'
+        ? `已保存到下载目录的“${item.name || '未命名世界书'}”文件夹`
+        : `已保存到下载目录：${paths[0] || ''}`;
+      message.success(`${partnerTypeLabel(item.type)}导出成功，${targetText}`);
+    } catch (err) {
+      message.error(`${partnerTypeLabel(item.type)}导出失败：${String(err)}`);
+    }
+  };
+
+  const handleRequestImportPartnerItems = (type: PartnerImportExportType) => {
+    pendingImportTypeRef.current = type;
+    if (importInputRef.current) {
+      importInputRef.current.value = '';
+      importInputRef.current.click();
+    }
+  };
+
+  const handleImportPartnerItemsFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+
+    const type = pendingImportTypeRef.current;
+    try {
+      const texts = await Promise.all(files.map((file) => file.text()));
+      const result = importPartnerItemsPackages(texts, type);
+      const worldBookCount = result.worldBookIds.length;
+      const characterCardCount = result.characterCardIds.length;
+      const failedCount = result.failedCount || 0;
+      if (worldBookCount === 0 && characterCardCount === 0) {
+        throw new Error('所选文件中没有可导入的内容');
+      }
+      const countText = type === 'world_book'
+        ? `新增 ${worldBookCount} 个世界书${characterCardCount > 0 ? `、${characterCardCount} 个角色卡` : ''}`
+        : `新增 ${characterCardCount} 个角色卡${worldBookCount > 0 ? `、${worldBookCount} 个世界书` : ''}`;
+      const failText = failedCount > 0 ? `，${failedCount} 个文件导入失败` : '';
+      message.success(`${partnerTypeLabel(type)}导入完成，${countText}${failText}`);
+    } catch (err) {
+      message.error(`${partnerTypeLabel(type)}导入失败：${String(err)}`);
+    } finally {
+      event.target.value = '';
+    }
   };
 
   // Find currently selected item
@@ -799,6 +922,7 @@ const Background: React.FC = () => {
             </Tooltip>
             <Tooltip title="删除" mouseEnterDelay={0.8}>
               <Button 
+                aria-label={`${item.type === 'world_book' ? '删除世界书' : '删除角色卡'} ${item.name}`}
                 type="text" 
                 danger
                 size="small" 
@@ -873,6 +997,7 @@ const Background: React.FC = () => {
             </Tooltip>
             <Tooltip title="删除" mouseEnterDelay={0.8}>
               <Button
+                aria-label={`${item.type === 'world_book' ? '删除世界书' : '删除角色卡'} ${item.name}`}
                 type="text"
                 danger
                 size="small"
@@ -1639,6 +1764,15 @@ const Background: React.FC = () => {
         flexDirection: 'column',
         background: '#ffffff'
       }}>
+        <input
+          ref={importInputRef}
+          type="file"
+          multiple
+          accept="application/json,.json"
+          aria-label="导入世界书或角色卡文件"
+          style={{ display: 'none' }}
+          onChange={handleImportPartnerItemsFile}
+        />
         {/* Title Header */}
         <div style={{ 
           padding: '16px 20px', 
@@ -1693,16 +1827,29 @@ const Background: React.FC = () => {
               letterSpacing: '0.05em'
             }}>
               <span>世界书</span>
-              <Tooltip title="新增世界书">
-                <Button 
-                  type="text" 
-                  size="small" 
-                  icon={<PlusOutlined style={{ fontSize: 12 }} />} 
-                  onClick={addWorldBook}
-                  style={{ width: 22, height: 22, padding: 0 }}
-                  className="add-category-btn"
-                />
-              </Tooltip>
+              <Space size={2}>
+                <Tooltip title="导入世界书">
+                  <Button
+                    aria-label="导入世界书"
+                    type="text"
+                    size="small"
+                    icon={<UploadOutlined style={{ fontSize: 12 }} />}
+                    onClick={() => handleRequestImportPartnerItems('world_book')}
+                    style={{ width: 22, height: 22, padding: 0 }}
+                    className="add-category-btn"
+                  />
+                </Tooltip>
+                <Tooltip title="新增世界书">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<PlusOutlined style={{ fontSize: 12 }} />}
+                    onClick={addWorldBook}
+                    style={{ width: 22, height: 22, padding: 0 }}
+                    className="add-category-btn"
+                  />
+                </Tooltip>
+              </Space>
             </div>
             
             <div style={{ marginBottom: 16 }}>
@@ -1729,16 +1876,29 @@ const Background: React.FC = () => {
               letterSpacing: '0.05em'
             }}>
               <span>角色卡</span>
-              <Tooltip title="新增角色卡">
-                <Button 
-                  type="text" 
-                  size="small" 
-                  icon={<PlusOutlined style={{ fontSize: 12 }} />} 
-                  onClick={addCharacterCard}
-                  style={{ width: 22, height: 22, padding: 0 }}
-                  className="add-category-btn"
-                />
-              </Tooltip>
+              <Space size={2}>
+                <Tooltip title="导入角色卡">
+                  <Button
+                    aria-label="导入角色卡"
+                    type="text"
+                    size="small"
+                    icon={<UploadOutlined style={{ fontSize: 12 }} />}
+                    onClick={() => handleRequestImportPartnerItems('character_card')}
+                    style={{ width: 22, height: 22, padding: 0 }}
+                    className="add-category-btn"
+                  />
+                </Tooltip>
+                <Tooltip title="新增角色卡">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<PlusOutlined style={{ fontSize: 12 }} />}
+                    onClick={addCharacterCard}
+                    style={{ width: 22, height: 22, padding: 0 }}
+                    className="add-category-btn"
+                  />
+                </Tooltip>
+              </Space>
             </div>
             
             <div>
@@ -1818,51 +1978,74 @@ const Background: React.FC = () => {
                 </span>
               </div>
 
-              {/* Mode Toggle Selector */}
-              <Radio.Group 
-                value={activeMode} 
-                onChange={(e) => setActiveMode(e.target.value)}
-                size="small"
-                style={{
-                  padding: 2,
-                  background: '#faf9f5',
-                  borderRadius: 6,
-                  border: '1px solid rgba(0,0,0,0.03)'
-                }}
-              >
-                <Radio.Button 
-                  value="edit"
+              <Space size={8}>
+                <Tooltip title={selectedItem.type === 'world_book' ? '导出当前世界书及归属角色卡' : '导出当前角色卡'}>
+                  <Button
+                    aria-label={selectedItem.type === 'world_book' ? '导出当前世界书' : '导出当前角色卡'}
+                    type="text"
+                    size="small"
+                    icon={<DownloadOutlined style={{ fontSize: 13, color: '#8c8882' }} />}
+                    onClick={() => handleExportPartnerItem(selectedItem)}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      padding: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: 6,
+                      background: '#faf9f5',
+                      border: '1px solid rgba(0,0,0,0.03)',
+                    }}
+                  />
+                </Tooltip>
+
+                {/* Mode Toggle Selector */}
+                <Radio.Group
+                  value={activeMode}
+                  onChange={(e) => setActiveMode(e.target.value)}
+                  size="small"
                   style={{
-                    borderRadius: 4,
-                    border: 'none',
-                    background: activeMode === 'edit' ? '#ffffff' : 'transparent',
-                    color: activeMode === 'edit' ? '#d97757' : '#8c8882',
-                    boxShadow: activeMode === 'edit' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
-                    fontWeight: activeMode === 'edit' ? 500 : 400
+                    padding: 2,
+                    background: '#faf9f5',
+                    borderRadius: 6,
+                    border: '1px solid rgba(0,0,0,0.03)'
                   }}
                 >
-                  <Space size={4}>
-                    <EditFilled style={{ fontSize: 11 }} />
-                    <span>编辑配置</span>
-                  </Space>
-                </Radio.Button>
-                <Radio.Button 
-                  value="preview"
-                  style={{
-                    borderRadius: 4,
-                    border: 'none',
-                    background: activeMode === 'preview' ? '#ffffff' : 'transparent',
-                    color: activeMode === 'preview' ? '#d97757' : '#8c8882',
-                    boxShadow: activeMode === 'preview' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
-                    fontWeight: activeMode === 'preview' ? 500 : 400
-                  }}
-                >
-                  <Space size={4}>
-                    <EyeOutlined style={{ fontSize: 11 }} />
-                    <span>效果预览</span>
-                  </Space>
-                </Radio.Button>
-              </Radio.Group>
+                  <Radio.Button
+                    value="edit"
+                    style={{
+                      borderRadius: 4,
+                      border: 'none',
+                      background: activeMode === 'edit' ? '#ffffff' : 'transparent',
+                      color: activeMode === 'edit' ? '#d97757' : '#8c8882',
+                      boxShadow: activeMode === 'edit' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
+                      fontWeight: activeMode === 'edit' ? 500 : 400
+                    }}
+                  >
+                    <Space size={4}>
+                      <EditFilled style={{ fontSize: 11 }} />
+                      <span>编辑配置</span>
+                    </Space>
+                  </Radio.Button>
+                  <Radio.Button
+                    value="preview"
+                    style={{
+                      borderRadius: 4,
+                      border: 'none',
+                      background: activeMode === 'preview' ? '#ffffff' : 'transparent',
+                      color: activeMode === 'preview' ? '#d97757' : '#8c8882',
+                      boxShadow: activeMode === 'preview' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
+                      fontWeight: activeMode === 'preview' ? 500 : 400
+                    }}
+                  >
+                    <Space size={4}>
+                      <EyeOutlined style={{ fontSize: 11 }} />
+                      <span>效果预览</span>
+                    </Space>
+                  </Radio.Button>
+                </Radio.Group>
+              </Space>
             </div>
 
             {/* Scrollable Work Area */}
@@ -1909,6 +2092,30 @@ const Background: React.FC = () => {
           </div>
         )}
       </div>
+
+      <Modal
+        title="删除世界书"
+        open={Boolean(pendingWorldBookDelete)}
+        onCancel={() => setPendingWorldBookDelete(null)}
+        footer={[
+          <Button key="delete-world" onClick={handleDeleteWorldBookOnly}>
+            删除世界书本身
+          </Button>,
+          <Button key="delete-bundle" danger type="primary" onClick={handleDeleteWorldBookWithCards}>
+            删除世界书及归属的角色卡
+          </Button>,
+          <Button key="cancel" onClick={() => setPendingWorldBookDelete(null)}>
+            取消
+          </Button>,
+        ]}
+      >
+        <p style={{ marginBottom: 8 }}>
+          确认删除「{pendingWorldBookDelete?.name || '未命名世界书'}」吗？
+        </p>
+        <p style={{ marginBottom: 0, color: '#8c8882' }}>
+          只删除世界书本身时，归属它的角色卡会变为未归属。
+        </p>
+      </Modal>
 
       {/* Background AI Extraction Modal */}
       <Modal

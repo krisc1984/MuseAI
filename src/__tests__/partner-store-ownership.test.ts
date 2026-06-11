@@ -82,6 +82,29 @@ describe('partner store character card ownership', () => {
     expect(usePartnerStore.getState().selectedType).toBe('character_card');
   });
 
+  it('deletes a World Book with its owned Character Cards when requested', () => {
+    usePartnerStore.setState({
+      characterCards: [
+        characterCard('cc-1', '沈霜', 'wb-1'),
+        characterCard('cc-2', '顾临', 'wb-2'),
+        characterCard('cc-3', '无归属角色', null),
+      ],
+      selectedId: 'cc-1',
+      selectedType: 'character_card',
+    });
+
+    usePartnerStore.getState().deleteWorldBookWithCharacterCards('wb-1');
+
+    expect(usePartnerStore.getState().worldBooks).toEqual([
+      expect.objectContaining({ id: 'wb-2' }),
+    ]);
+    expect(usePartnerStore.getState().characterCards).toEqual([
+      expect.objectContaining({ id: 'cc-2', worldBookId: 'wb-2' }),
+      expect.objectContaining({ id: 'cc-3', worldBookId: null }),
+    ]);
+    expect(usePartnerStore.getState().selectedId).not.toBe('cc-1');
+  });
+
   it('groups cards by valid World Book owner and keeps missing or invalid owners unassigned', () => {
     const groups = groupCharacterCardsByWorldBook(
       [worldBook('wb-1', '云州世界书'), worldBook('wb-2', '北境世界书')],

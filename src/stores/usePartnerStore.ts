@@ -83,6 +83,31 @@ export interface PartnerItem {
   worldBookId?: string | null;
 }
 
+export type PartnerImportExportType = 'world_book' | 'character_card';
+
+export interface PartnerItemsPackage {
+  schema: 'museai.partner-items';
+  version: 1;
+  exportedAt: string;
+  worldBooks: Array<{
+    id?: string;
+    name: string;
+    fields?: PartnerItemFields;
+  }>;
+  characterCards: Array<{
+    id?: string;
+    name: string;
+    fields?: PartnerItemFields;
+    worldBookId?: string | null;
+  }>;
+}
+
+export interface PartnerImportResult {
+  worldBookIds: string[];
+  characterCardIds: string[];
+  failedCount?: number;
+}
+
 interface PartnerState {
   worldBooks: PartnerItem[];
   characterCards: PartnerItem[];
@@ -92,6 +117,7 @@ interface PartnerState {
   addCharacterCard: () => void;
   selectItem: (id: string | null, type: 'world_book' | 'character_card' | null) => void;
   deleteItem: (id: string, type: 'world_book' | 'character_card') => void;
+  deleteWorldBookWithCharacterCards: (id: string) => void;
   updateItemName: (id: string, type: 'world_book' | 'character_card', name: string) => void;
   updateItemContent: (id: string, type: 'world_book' | 'character_card', content: string) => void;
   updateItemFields: (id: string, type: 'world_book' | 'character_card', fields: PartnerItemFields) => void;
@@ -103,6 +129,11 @@ interface PartnerState {
     worldBooks: Array<{ name: string; fields: PartnerItemFields }>;
     characterCards: Array<{ name: string; fields: PartnerItemFields; worldBookId?: string | null }>;
   }) => { worldBookIds: string[]; characterCardIds: string[] };
+  exportPartnerItems: (type: PartnerImportExportType) => PartnerItemsPackage;
+  exportPartnerItem: (type: PartnerImportExportType, id: string) => PartnerItemsPackage;
+  exportPartnerItemBundle: (type: PartnerImportExportType, id: string) => PartnerItemsPackage;
+  importPartnerItemsPackage: (packageText: string, type: PartnerImportExportType) => PartnerImportResult;
+  importPartnerItemsPackages: (packageTexts: string[], type: PartnerImportExportType) => PartnerImportResult;
 }
 
 const MODULE_NAMES: Record<string, string> = {
@@ -302,6 +333,83 @@ export const compileItemToMarkdown = (name: string, type: 'world_book' | 'charac
   }
 };
 
+const PACKAGE_SCHEMA = 'museai.partner-items' as const;
+const PACKAGE_VERSION = 1 as const;
+
+const toPackageWorldBook = (item: PartnerItem): PartnerItemsPackage['worldBooks'][number] => ({
+  id: item.id,
+  name: item.name,
+  fields: normalizePartnerFields(item.fields),
+});
+
+const toPackageCharacterCard = (item: PartnerItem): PartnerItemsPackage['characterCards'][number] => ({
+  id: item.id,
+  name: item.name,
+  fields: normalizePartnerFields(item.fields),
+  worldBookId: item.worldBookId ?? null,
+});
+
+export const createPartnerItemsPackage = (
+  worldBooks: PartnerItem[],
+  characterCards: PartnerItem[],
+  type: PartnerImportExportType,
+): PartnerItemsPackage => ({
+  schema: PACKAGE_SCHEMA,
+  version: PACKAGE_VERSION,
+  exportedAt: new Date().toISOString(),
+  worldBooks: type === 'world_book' ? worldBooks.map(toPackageWorldBook) : [],
+  characterCards: type === 'character_card' ? characterCards.map(toPackageCharacterCard) : [],
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const readPackageItems = (value: unknown): PartnerItemsPackage => {
+  if (!isRecord(value) || value.schema !== PACKAGE_SCHEMA || value.version !== PACKAGE_VERSION) {
+    throw new Error('文件不是 MuseAI 世界书/角色卡导入格式');
+  }
+
+  const worldBookInputs = Array.isArray(value.worldBooks) ? value.worldBooks : [];
+  const characterCardInputs = Array.isArray(value.characterCards) ? value.characterCards : [];
+
+  const worldBooks = worldBookInputs
+    .filter(isRecord)
+    .map((item) => ({
+      id: typeof item.id === 'string' ? item.id : undefined,
+      name: fieldToText(item.name) || '未命名世界书',
+      fields: normalizePartnerFields(item.fields as PartnerItemFields | undefined),
+    }));
+
+  const characterCards = characterCardInputs
+    .filter(isRecord)
+    .map((item) => ({
+      id: typeof item.id === 'string' ? item.id : undefined,
+      name: fieldToText(item.name) || '未命名角色卡',
+      fields: normalizePartnerFields(item.fields as PartnerItemFields | undefined),
+      worldBookId: typeof item.worldBookId === 'string' ? item.worldBookId : null,
+    }));
+
+  return {
+    schema: PACKAGE_SCHEMA,
+    version: PACKAGE_VERSION,
+    exportedAt: typeof value.exportedAt === 'string' ? value.exportedAt : new Date().toISOString(),
+    worldBooks,
+    characterCards,
+  };
+};
+
+export const parsePartnerItemsPackage = (packageText: string): PartnerItemsPackage => {
+  try {
+    return readPackageItems(JSON.parse(packageText));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('MuseAI')) {
+      throw error;
+    }
+    throw new Error('文件内容不是合法 JSON，无法导入');
+  }
+};
+
 const initialWorldBooks: PartnerItem[] = [
   {
     id: 'wb-initial-1',
@@ -359,8 +467,8 @@ const initialCharacterCards: PartnerItem[] = [
 initialCharacterCards[0].content = compileItemToMarkdown(initialCharacterCards[0].name, 'character_card', initialCharacterCards[0].fields!);
 
 export const usePartnerStore = create<PartnerState>()(
-  persist(
-    (set) => ({
+  persist<PartnerState>(
+    (set, get) => ({
       worldBooks: initialWorldBooks,
       characterCards: initialCharacterCards,
       selectedId: 'wb-initial-1',
@@ -486,6 +594,42 @@ export const usePartnerStore = create<PartnerState>()(
           characterCards: nextCharacterCards,
           selectedId: newSelectedId,
           selectedType: newSelectedType,
+        };
+      }),
+
+      deleteWorldBookWithCharacterCards: (id) => set((state) => {
+        const removedCharacterIds = new Set(
+          state.characterCards
+            .filter((item) => item.worldBookId === id)
+            .map((item) => item.id)
+        );
+        const nextWorldBooks = state.worldBooks.filter((item) => item.id !== id);
+        const nextCharacterCards = state.characterCards.filter((item) => item.worldBookId !== id);
+        const isSelectedRemoved = (
+          (state.selectedType === 'world_book' && state.selectedId === id) ||
+          (state.selectedType === 'character_card' && state.selectedId != null && removedCharacterIds.has(state.selectedId))
+        );
+
+        let selectedId = state.selectedId;
+        let selectedType = state.selectedType;
+        if (isSelectedRemoved) {
+          if (nextWorldBooks.length > 0) {
+            selectedId = nextWorldBooks[nextWorldBooks.length - 1].id;
+            selectedType = 'world_book';
+          } else if (nextCharacterCards.length > 0) {
+            selectedId = nextCharacterCards[nextCharacterCards.length - 1].id;
+            selectedType = 'character_card';
+          } else {
+            selectedId = null;
+            selectedType = null;
+          }
+        }
+
+        return {
+          worldBooks: nextWorldBooks,
+          characterCards: nextCharacterCards,
+          selectedId,
+          selectedType,
         };
       }),
 
@@ -705,6 +849,129 @@ export const usePartnerStore = create<PartnerState>()(
         });
 
         return { worldBookIds, characterCardIds };
+      },
+
+      exportPartnerItems: (type: PartnerImportExportType) => {
+        const state = get();
+        return createPartnerItemsPackage(state.worldBooks, state.characterCards, type);
+      },
+
+      exportPartnerItem: (type: PartnerImportExportType, id: string) => {
+        const state = get();
+        const worldBooks = type === 'world_book'
+          ? state.worldBooks.filter((item) => item.id === id)
+          : [];
+        const characterCards = type === 'character_card'
+          ? state.characterCards.filter((item) => item.id === id)
+          : [];
+        return createPartnerItemsPackage(worldBooks, characterCards, type);
+      },
+
+      exportPartnerItemBundle: (type: PartnerImportExportType, id: string) => {
+        const state = get();
+        if (type === 'world_book') {
+          const worldBooks = state.worldBooks.filter((item) => item.id === id);
+          const characterCards = state.characterCards.filter((item) => item.worldBookId === id);
+          const basePackage = createPartnerItemsPackage(worldBooks, [], 'world_book');
+          return {
+            ...basePackage,
+            characterCards: characterCards.map(toPackageCharacterCard),
+          };
+        }
+        const characterCards = state.characterCards.filter((item) => item.id === id);
+        return createPartnerItemsPackage([], characterCards, 'character_card');
+      },
+
+      importPartnerItemsPackage: (packageText: string, type: PartnerImportExportType) => {
+        const parsed = parsePartnerItemsPackage(packageText);
+        if (type === 'world_book' && parsed.worldBooks.length === 0) {
+          throw new Error('导入文件中没有可导入的世界书');
+        }
+        if (type === 'character_card' && parsed.characterCards.length === 0) {
+          throw new Error('导入文件中没有可导入的角色卡');
+        }
+
+        const time = Date.now();
+        const importedWorldBooks = type === 'world_book'
+          ? parsed.worldBooks
+          : parsed.worldBooks.filter((worldBook) =>
+              parsed.characterCards.some((card) => card.worldBookId && card.worldBookId === worldBook.id)
+            );
+        const importedWorldBookSourceIds = new Set(importedWorldBooks.map((worldBook) => worldBook.id).filter(Boolean));
+        const importedCharacterCards = type === 'character_card'
+          ? parsed.characterCards
+          : parsed.characterCards.filter((card) => card.worldBookId && importedWorldBookSourceIds.has(card.worldBookId));
+        const worldBookIds = importedWorldBooks.map((_, index) => `wb-import-${time}-${index}`);
+        const characterCardIds = importedCharacterCards.map((_, index) => `cc-import-${time}-${index}`);
+
+        set((state) => {
+          const sourceToLocalWorldBookId = new Map<string, string>();
+          const newWorldBooks: PartnerItem[] = importedWorldBooks.map((worldBook, index) => {
+            const id = worldBookIds[index];
+            if (worldBook.id) {
+              sourceToLocalWorldBookId.set(worldBook.id, id);
+            }
+            const fields = normalizePartnerFields(worldBook.fields);
+            return {
+              id,
+              name: worldBook.name || '未命名世界书',
+              type: 'world_book',
+              content: compileItemToMarkdown(worldBook.name || '未命名世界书', 'world_book', fields),
+              fields,
+            };
+          });
+
+          const validWorldBookIds = new Set([...state.worldBooks, ...newWorldBooks].map((item) => item.id));
+          const newCharacterCards: PartnerItem[] = importedCharacterCards.map((card, index) => {
+            const id = characterCardIds[index];
+            const fields = normalizePartnerFields(card.fields);
+            const mappedWorldBookId = card.worldBookId ? sourceToLocalWorldBookId.get(card.worldBookId) : null;
+            const candidateWorldBookId = mappedWorldBookId ?? card.worldBookId ?? null;
+            const worldBookId = candidateWorldBookId && validWorldBookIds.has(candidateWorldBookId)
+              ? candidateWorldBookId
+              : null;
+            return {
+              id,
+              name: card.name || '未命名角色卡',
+              type: 'character_card',
+              worldBookId,
+              content: compileItemToMarkdown(card.name || '未命名角色卡', 'character_card', fields),
+              fields,
+            };
+          });
+
+          return {
+            worldBooks: [...state.worldBooks, ...newWorldBooks],
+            characterCards: [...state.characterCards, ...newCharacterCards],
+            selectedId: newWorldBooks[0]?.id ?? newCharacterCards[0]?.id ?? state.selectedId,
+            selectedType: newWorldBooks.length > 0 ? 'world_book' : newCharacterCards.length > 0 ? 'character_card' : state.selectedType,
+          };
+        });
+
+        return { worldBookIds, characterCardIds };
+      },
+
+      importPartnerItemsPackages: (packageTexts: string[], type: PartnerImportExportType) => {
+        const packages: PartnerItemsPackage[] = [];
+        let failedCount = 0;
+        packageTexts.forEach((text) => {
+          try {
+            packages.push(parsePartnerItemsPackage(text));
+          } catch {
+            failedCount += 1;
+          }
+        });
+
+        const combined: PartnerItemsPackage = {
+          schema: PACKAGE_SCHEMA,
+          version: PACKAGE_VERSION,
+          exportedAt: new Date().toISOString(),
+          worldBooks: packages.flatMap((item) => item.worldBooks),
+          characterCards: packages.flatMap((item) => item.characterCards),
+        };
+
+        const result = get().importPartnerItemsPackage(JSON.stringify(combined), type);
+        return { ...result, failedCount };
       },
     }),
     {

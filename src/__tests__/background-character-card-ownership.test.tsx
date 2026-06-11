@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { invoke } from '@tauri-apps/api/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Background from '../pages/Background';
 import { PartnerItem, usePartnerStore } from '../stores/usePartnerStore';
+
+const invokeMock = vi.mocked(invoke);
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
@@ -26,6 +29,11 @@ const characterCard = (id: string, name: string, worldBookId?: string | null): P
 
 describe('Background Character Card ownership', () => {
   beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'export_json_files_to_downloads') return ['/Users/test/Downloads/export.json'];
+      return undefined;
+    });
     usePartnerStore.setState({
       worldBooks: [worldBook('wb-1', '云州世界书'), worldBook('wb-2', '北境世界书')],
       characterCards: [
@@ -90,6 +98,152 @@ describe('Background Character Card ownership', () => {
 
     await waitFor(() => {
       expect(usePartnerStore.getState().characterCards.find((card) => card.id === 'cc-1')?.worldBookId).toBeNull();
+    });
+  });
+
+  it('shows import controls in section headers and keeps export off the section headers', () => {
+    render(<Background />);
+
+    expect(screen.getByRole('button', { name: '导入世界书' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导入角色卡' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '导出世界书' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '导出角色卡' })).not.toBeInTheDocument();
+  });
+
+  it('asks how to delete a World Book and can keep owned Character Cards', async () => {
+    render(<Background />);
+
+    fireEvent.click(screen.getByLabelText('删除世界书 云州世界书'));
+
+    expect(await screen.findByText('删除世界书')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '删除世界书本身' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '删除世界书及归属的角色卡' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '删除世界书本身' }));
+
+    await waitFor(() => {
+      expect(usePartnerStore.getState().worldBooks).toEqual([
+        expect.objectContaining({ id: 'wb-2' }),
+      ]);
+      expect(usePartnerStore.getState().characterCards).toEqual([
+        expect.objectContaining({ id: 'cc-1', worldBookId: null }),
+        expect.objectContaining({ id: 'cc-2' }),
+      ]);
+    });
+  });
+
+  it('can delete a World Book with owned Character Cards from the confirm modal', async () => {
+    render(<Background />);
+
+    fireEvent.click(screen.getByLabelText('删除世界书 云州世界书'));
+    fireEvent.click(await screen.findByRole('button', { name: '删除世界书及归属的角色卡' }));
+
+    await waitFor(() => {
+      expect(usePartnerStore.getState().worldBooks).toEqual([
+        expect.objectContaining({ id: 'wb-2' }),
+      ]);
+      expect(usePartnerStore.getState().characterCards).toEqual([
+        expect.objectContaining({ id: 'cc-2' }),
+      ]);
+    });
+  });
+
+  it('exports the selected World Book bundle from the right detail header into Downloads', async () => {
+    render(<Background />);
+
+    fireEvent.click(screen.getAllByText('云州世界书')[0]);
+    fireEvent.click(await screen.findByRole('button', { name: '导出当前世界书' }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('export_json_files_to_downloads', {
+        directoryName: '云州世界书',
+        files: expect.arrayContaining([
+          expect.objectContaining({
+            relativePath: '世界书.json',
+            content: expect.stringContaining('"worldBooks"'),
+          }),
+          expect.objectContaining({
+            relativePath: '角色卡/沈霜.json',
+            content: expect.stringContaining('"characterCards"'),
+          }),
+        ]),
+      });
+    });
+  });
+
+  it('exports the selected Character Card from the right detail header into Downloads', async () => {
+    render(<Background />);
+
+    fireEvent.click(screen.getByText('沈霜'));
+    fireEvent.click(await screen.findByRole('button', { name: '导出当前角色卡' }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('export_json_files_to_downloads', {
+        directoryName: null,
+        files: [
+          expect.objectContaining({
+            relativePath: 'museai-character-card-沈霜.json',
+            content: expect.stringContaining('"characterCards"'),
+          }),
+        ],
+      });
+    });
+  });
+
+  it('imports multiple Character Card files through the hidden file input', async () => {
+    render(<Background />);
+
+    fireEvent.click(screen.getByRole('button', { name: '导入角色卡' }));
+    const input = screen.getByLabelText('导入世界书或角色卡文件') as HTMLInputElement;
+    expect(input.multiple).toBe(true);
+    const firstFile = new File([
+      JSON.stringify({
+        schema: 'museai.partner-items',
+        version: 1,
+        exportedAt: '2026-06-11T00:00:00.000Z',
+        worldBooks: [],
+        characterCards: [
+          {
+            name: '新导入角色',
+            worldBookId: 'wb-1',
+            fields: { age: 20 },
+          },
+        ],
+      }),
+    ], 'cards.json', { type: 'application/json' });
+    const secondFile = new File([
+      JSON.stringify({
+        schema: 'museai.partner-items',
+        version: 1,
+        exportedAt: '2026-06-11T00:00:00.000Z',
+        worldBooks: [],
+        characterCards: [
+          {
+            name: '第二个角色',
+            worldBookId: 'wb-1',
+            fields: { age: 21 },
+          },
+        ],
+      }),
+    ], 'cards-2.json', { type: 'application/json' });
+
+    fireEvent.change(input, { target: { files: [firstFile, secondFile] } });
+
+    await waitFor(() => {
+      expect(usePartnerStore.getState().characterCards).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: '新导入角色',
+            worldBookId: 'wb-1',
+            fields: expect.objectContaining({ age: '20' }),
+          }),
+          expect.objectContaining({
+            name: '第二个角色',
+            worldBookId: 'wb-1',
+            fields: expect.objectContaining({ age: '21' }),
+          }),
+        ]),
+      );
     });
   });
 });

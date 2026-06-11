@@ -191,6 +191,8 @@ pub fn run() {
             read_file,
             read_image_data_url,
             write_file,
+            export_json_to_downloads,
+            export_json_files_to_downloads,
             create_file,
             create_dir,
             rename_path,

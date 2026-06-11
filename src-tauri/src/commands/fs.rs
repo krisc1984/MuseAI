@@ -1,9 +1,10 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use base64::{engine::general_purpose, Engine as _};
-use tauri::Emitter;
+use serde::Deserialize;
+use tauri::{Emitter, Manager};
 
 use crate::models::*;
 use crate::utils::*;
@@ -95,6 +96,150 @@ pub fn write_file(app: tauri::AppHandle, path: String, content: String) -> Resul
     file_modified_at(path)
 }
 
+fn sanitize_download_file_name(file_name: &str) -> String {
+    let mut sanitized = file_name
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string();
+
+    if sanitized.is_empty() {
+        sanitized = "museai-export.json".to_string();
+    }
+    if !sanitized.to_ascii_lowercase().ends_with(".json") {
+        sanitized.push_str(".json");
+    }
+    sanitized
+}
+
+fn sanitize_path_component(name: &str, fallback: &str) -> String {
+    let sanitized = name
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string();
+
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn unique_download_path(download_dir: &Path, file_name: &str) -> PathBuf {
+    let candidate = download_dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let path = Path::new(file_name);
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("museai-export");
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("json");
+    let mut index = 1;
+    loop {
+        let next = download_dir.join(format!("{} ({}).{}", stem, index, extension));
+        if !next.exists() {
+            return next;
+        }
+        index += 1;
+    }
+}
+
+fn unique_dir_path(parent: &Path, dir_name: &str) -> PathBuf {
+    let candidate = parent.join(dir_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let mut index = 1;
+    loop {
+        let next = parent.join(format!("{} ({})", dir_name, index));
+        if !next.exists() {
+            return next;
+        }
+        index += 1;
+    }
+}
+
+#[tauri::command]
+pub fn export_json_to_downloads(
+    app: tauri::AppHandle,
+    file_name: String,
+    content: String,
+) -> Result<String, String> {
+    let download_dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
+    let safe_file_name = sanitize_download_file_name(&file_name);
+    let path = unique_download_path(&download_dir, &safe_file_name);
+    fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadExportFile {
+    relative_path: String,
+    content: String,
+}
+
+#[tauri::command]
+pub fn export_json_files_to_downloads(
+    app: tauri::AppHandle,
+    directory_name: Option<String>,
+    files: Vec<DownloadExportFile>,
+) -> Result<Vec<String>, String> {
+    if files.is_empty() {
+        return Err("没有可导出的文件".to_string());
+    }
+
+    let download_dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
+
+    let base_dir = if let Some(name) = directory_name {
+        let safe_dir_name = sanitize_path_component(&name, "MuseAI导出");
+        let dir = unique_dir_path(&download_dir, &safe_dir_name);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        dir
+    } else {
+        download_dir
+    };
+
+    let mut written_paths = Vec::with_capacity(files.len());
+    for file in files {
+        let parts = file
+            .relative_path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        let (file_name, parent_parts) = parts
+            .split_last()
+            .ok_or_else(|| "导出文件名不能为空".to_string())?;
+        let mut parent = base_dir.clone();
+        for part in parent_parts {
+            parent = parent.join(sanitize_path_component(part, "文件夹"));
+        }
+        fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+        let safe_file_name = sanitize_download_file_name(file_name);
+        let path = unique_download_path(&parent, &safe_file_name);
+        fs::write(&path, file.content).map_err(|e| e.to_string())?;
+        written_paths.push(path.to_string_lossy().into_owned());
+    }
+
+    Ok(written_paths)
+}
+
 #[tauri::command]
 pub fn create_file(app: tauri::AppHandle, path: String) -> Result<u64, String> {
     let path = Path::new(&path);
@@ -171,4 +316,42 @@ pub fn file_modified_at(path: String) -> Result<u64, String> {
         .as_millis();
 
     u64::try_from(millis).map_err(|_| String::from("File modified timestamp is too large"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("museai-fs-{}-{}", name, nanos));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn sanitize_download_file_name_keeps_json_and_removes_path_chars() {
+        assert_eq!(
+            sanitize_download_file_name("museai-world-book-坏/标题?:.json"),
+            "museai-world-book-坏_标题__.json"
+        );
+        assert_eq!(sanitize_download_file_name("角色卡"), "角色卡.json");
+        assert_eq!(sanitize_download_file_name("..."), "museai-export.json");
+    }
+
+    #[test]
+    fn unique_download_path_avoids_overwriting_existing_files() {
+        let dir = temp_dir("unique-download");
+        let first = dir.join("export.json");
+        fs::write(&first, "{}").expect("write first");
+
+        let next = unique_download_path(&dir, "export.json");
+
+        assert_eq!(next.file_name().and_then(|value| value.to_str()), Some("export (1).json"));
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
 }
