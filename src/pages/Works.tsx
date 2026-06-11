@@ -15,6 +15,9 @@ const MAX_FILE_TREE_WIDTH = 420;
 const EDITOR_MIN_WIDTH = 400;
 const MIN_AGENT_WIDTH = 380;
 const MAX_AGENT_WIDTH = 860;
+const RESIZE_KEYBOARD_STEP = 16;
+
+const clampDimension = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 interface FileNode {
   name: string;
@@ -296,6 +299,20 @@ const Works: React.FC = () => {
     setIsScoreModalOpen(false);
   }, [selectedFile]);
 
+  const handleFileTreeSeparatorKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowRight' ? RESIZE_KEYBOARD_STEP : -RESIZE_KEYBOARD_STEP;
+    setFileTreeWidth(clampDimension(fileTreeWidth + delta, MIN_FILE_TREE_WIDTH, MAX_FILE_TREE_WIDTH));
+  };
+
+  const handleAgentSeparatorKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowLeft' ? RESIZE_KEYBOARD_STEP : -RESIZE_KEYBOARD_STEP;
+    setAgentWidth(clampDimension(agentWidth + delta, MIN_AGENT_WIDTH, MAX_AGENT_WIDTH));
+  };
+
   return (
     <div style={{ height: '100%', width: '100%', overflowX: 'hidden', overflowY: 'hidden', background: '#faf9f5' }}>
       <div style={{ display: 'flex', height: '100%', minWidth: fileTreeWidth + EDITOR_MIN_WIDTH + (isAgentVisible ? agentWidth : 0) }}>
@@ -317,7 +334,9 @@ const Works: React.FC = () => {
             aria-label="调整文件树宽度"
             aria-orientation="vertical"
             role="separator"
+            tabIndex={0}
             onMouseDown={() => setIsResizingFileTree(true)}
+            onKeyDown={handleFileTreeSeparatorKeyDown}
             style={{
               position: 'absolute',
               top: 0,
@@ -526,7 +545,9 @@ const Works: React.FC = () => {
               aria-label="调整 Agent 宽度"
               aria-orientation="vertical"
               role="separator"
+              tabIndex={0}
               onMouseDown={() => setIsResizingAgent(true)}
+              onKeyDown={handleAgentSeparatorKeyDown}
               style={{
                 position: 'absolute',
                 top: 0,

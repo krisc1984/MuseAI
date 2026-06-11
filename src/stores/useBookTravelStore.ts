@@ -407,7 +407,7 @@ export const useBookTravelStore = create<BookTravelState>()(
   ),
 );
 
-export const getBookTravelSnapshot = (): BookTravelSnapshot => {
+const getBookTravelSnapshot = (): BookTravelSnapshot => {
   const state = useBookTravelStore.getState();
   return {
     selectedOutline: state.selectedOutline,

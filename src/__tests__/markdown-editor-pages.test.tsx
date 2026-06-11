@@ -53,6 +53,7 @@ describe('Markdown editor page integration', () => {
       'data-file-path',
       '/Users/test/Documents/MuseAI/articles/work.md',
     );
+    expect(screen.getByRole('separator', { name: '调整文件树宽度' })).toBeInTheDocument();
   });
 
   it('mounts the shared editor on the Outline page', () => {
@@ -66,6 +67,8 @@ describe('Markdown editor page integration', () => {
       'data-file-path',
       '/Users/test/Documents/MuseAI/outline/outline.md',
     );
+    expect(screen.getByRole('separator', { name: '调整文件树宽度' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '大纲评分暂无' })).toBeInTheDocument();
   });
 
   it('mounts the shared editor on the De-AI page', () => {
@@ -75,6 +78,8 @@ describe('Markdown editor page integration', () => {
       'data-file-path',
       '/Users/test/Documents/MuseAI/articles/de-ai.md',
     );
+    expect(screen.getByRole('separator', { name: '调整目录宽度' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'AI味评分暂无' })).toBeInTheDocument();
   });
 
   it('mounts the shared editor on the Examples page', () => {

@@ -14,16 +14,14 @@ export const BACKGROUND_CHARACTER_CONCURRENCY = 5;
 
 export const splitCharacterNames = (value: string): string[] => {
   const seen = new Set<string>();
-  const names = value
-    .split(/[\n,，、；;]+/)
-    .map((name) => name.trim())
-    .filter(Boolean);
-
-  return names.filter((name) => {
-    if (seen.has(name)) return false;
+  const names: string[] = [];
+  for (const part of value.split(/[\n,，、；;]+/)) {
+    const name = part.trim();
+    if (!name || seen.has(name)) continue;
     seen.add(name);
-    return true;
-  });
+    names.push(name);
+  }
+  return names;
 };
 
 interface RunCharacterBatchOptions<T> {

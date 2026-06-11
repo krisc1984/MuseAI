@@ -19,6 +19,8 @@ import { warmMinimalistTheme } from '../theme';
 
 const { Title, Text } = Typography;
 
+const WEEK_DAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
 interface DailyActivity {
   date: string;
   count: number;
@@ -89,8 +91,7 @@ const Home: React.FC = () => {
 
   const today = new Date();
   const dateStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
-  const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-  const weekStr = weekDays[today.getDay()];
+  const weekStr = WEEK_DAYS[today.getDay()];
 
   const activeDays = stats?.dailyActivity.filter((d) => d.count > 0).length ?? 0;
 
@@ -242,7 +243,7 @@ const Home: React.FC = () => {
                           aspectRatio: '1',
                           borderRadius: 3,
                           background: getHeatColor(day.count),
-                          transition: 'all 0.2s ease',
+                          transition: 'background 0.2s ease, transform 0.2s ease',
                           cursor: 'pointer',
                         }}
                         className="heat-cell"
@@ -293,7 +294,7 @@ const Home: React.FC = () => {
                   borderRadius: 12,
                   border: 'none',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-                  transition: 'all 0.25s ease',
+                  transition: 'box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease',
                 }}
               >
                 <div
@@ -338,7 +339,7 @@ const Home: React.FC = () => {
                   borderRadius: 12,
                   border: 'none',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-                  transition: 'all 0.25s ease',
+                  transition: 'box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease',
                 }}
               >
                 <div

@@ -21,6 +21,24 @@ interface WorkspaceDirectoryProps {
   footer?: React.ReactNode;
 }
 
+const parentPathOf = (path: string) => path.replace(/[\\/][^\\/]*$/, '');
+
+const joinPath = (dir: string, name: string) => `${dir}/${name}`;
+
+const isInsidePath = (path: string, parent: string) => {
+  const normalizedPath = path.replace(/\\/g, '/');
+  const normalizedParent = parent.replace(/\\/g, '/');
+  return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`);
+};
+
+const replacePathPrefix = (path: string, oldPrefix: string, newPrefix: string) => {
+  if (path === oldPrefix) return newPrefix;
+  if (path.startsWith(`${oldPrefix}/`) || path.startsWith(`${oldPrefix}\\`)) {
+    return `${newPrefix}${path.slice(oldPrefix.length)}`;
+  }
+  return path;
+};
+
 const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType, selectedFile, onSelectFile, footer }) => {
   const [nodes, setNodes] = useState<FileNode[]>([]);
   const [rootDir, setRootDir] = useState<string>('');
@@ -34,24 +52,6 @@ const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType,
   const [form] = Form.useForm();
   
   
-
-  const parentPathOf = (path: string) => path.replace(/[\\/][^\\/]*$/, '');
-
-  const joinPath = (dir: string, name: string) => `${dir}/${name}`;
-
-  const isInsidePath = (path: string, parent: string) => {
-    const normalizedPath = path.replace(/\\/g, '/');
-    const normalizedParent = parent.replace(/\\/g, '/');
-    return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`);
-  };
-
-  const replacePathPrefix = (path: string, oldPrefix: string, newPrefix: string) => {
-    if (path === oldPrefix) return newPrefix;
-    if (path.startsWith(`${oldPrefix}/`) || path.startsWith(`${oldPrefix}\\`)) {
-      return `${newPrefix}${path.slice(oldPrefix.length)}`;
-    }
-    return path;
-  };
 
   const loadFiles = async (keys: React.Key[] = expandedKeys) => {
     try {
@@ -442,9 +442,9 @@ const WorkspaceDirectory: React.FC<WorkspaceDirectoryProps> = ({ title, dirType,
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <strong style={{ color: '#d97757', fontSize: 16 }}>{title}</strong>
         <Dropdown menu={menuProps} trigger={['click']}>
-          <a onClick={(e) => e.preventDefault()} style={{ cursor: 'pointer', color: '#d97757', fontWeight: 500 }}>
+          <button type="button" style={{ cursor: 'pointer', color: '#d97757', fontWeight: 500, border: 0, background: 'transparent', padding: 0, font: 'inherit' }}>
             添加 <DownOutlined style={{ fontSize: 12 }} />
-          </a>
+          </button>
         </Dropdown>
       </div>
       <Dropdown menu={rootContextMenuProps} trigger={['contextMenu']}>

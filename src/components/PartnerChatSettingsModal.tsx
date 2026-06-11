@@ -41,7 +41,7 @@ export const PartnerChatSettingsModal: React.FC<PartnerChatSettingsModalProps> =
         ...userInfo
       });
     }
-  }, [open, selectedWorldBookId, selectedCharacterCardId, userInfo, worldBooks, characterCards]);
+  }, [open, selectedWorldBookId, selectedCharacterCardId, userInfo, worldBooks, characterCards, form, setSelectedWorldBookId, setSelectedCharacterCardId]);
 
   const handleSave = () => {
     const values = form.getFieldsValue();

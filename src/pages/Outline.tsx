@@ -16,6 +16,10 @@ const MAX_FILE_TREE_WIDTH = 420;
 const EDITOR_MIN_WIDTH = 400;
 const MIN_AGENT_WIDTH = 380;
 const MAX_AGENT_WIDTH = 860;
+const RESIZE_KEYBOARD_STEP = 16;
+const OUTLINE_SCORE_KEYS = ['引流能力', '开局钩子', '设定新鲜感', '情绪爽点密度', '人设代入与话题性'];
+
+const clampDimension = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 interface VersionInfo {
   id: string;
@@ -145,9 +149,8 @@ const Outline: React.FC = () => {
   if (suggestion) {
     try {
       parsedAssessment = JSON.parse(suggestion);
-      const keys = ['引流能力', '开局钩子', '设定新鲜感', '情绪爽点密度', '人设代入与话题性'];
       let sum = 0;
-      keys.forEach(k => {
+      OUTLINE_SCORE_KEYS.forEach(k => {
         if (typeof parsedAssessment[k] === 'number') {
           sum += parsedAssessment[k];
         }
@@ -165,6 +168,20 @@ const Outline: React.FC = () => {
   useEffect(() => {
     setIsScoreModalOpen(false);
   }, [selectedOutlineFile]);
+
+  const handleFileTreeSeparatorKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowRight' ? RESIZE_KEYBOARD_STEP : -RESIZE_KEYBOARD_STEP;
+    setFileTreeWidth(clampDimension(fileTreeWidth + delta, MIN_FILE_TREE_WIDTH, MAX_FILE_TREE_WIDTH));
+  };
+
+  const handleAgentSeparatorKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowLeft' ? RESIZE_KEYBOARD_STEP : -RESIZE_KEYBOARD_STEP;
+    setAgentWidth(clampDimension(agentWidth + delta, MIN_AGENT_WIDTH, MAX_AGENT_WIDTH));
+  };
 
   return (
     <div style={{ height: '100%', width: '100%', overflowX: 'hidden', overflowY: 'hidden', background: '#faf9f5' }}>
@@ -203,7 +220,9 @@ const Outline: React.FC = () => {
             aria-label="调整文件树宽度"
             aria-orientation="vertical"
             role="separator"
+            tabIndex={0}
             onMouseDown={() => setIsResizingFileTree(true)}
+            onKeyDown={handleFileTreeSeparatorKeyDown}
             style={{
               position: 'absolute',
               top: 0,
@@ -304,9 +323,10 @@ const Outline: React.FC = () => {
                       )
                     }
                   >
-                    <div 
+                    <button
+                      type="button"
                       className="de-ai-score-pill" 
-                      style={{ cursor: 'pointer' }} 
+                      style={{ cursor: 'pointer', border: 0, background: 'transparent', padding: 0 }}
                       aria-label={`大纲评分${parsedAssessment ? totalScore : '暂无'}`}
                       onClick={() => {
                         if (parsedAssessment) {
@@ -323,7 +343,7 @@ const Outline: React.FC = () => {
                         status={parsedAssessment ? (totalScore > 80 ? 'success' : 'normal') : 'normal'}
                         strokeColor={parsedAssessment ? undefined : "#e8e8e8"} 
                       />
-                    </div>
+                    </button>
                   </Popover>
                   
                   <ScoreDetailsModal 
@@ -440,7 +460,9 @@ const Outline: React.FC = () => {
               aria-label="调整 Agent 宽度"
               aria-orientation="vertical"
               role="separator"
+              tabIndex={0}
               onMouseDown={() => setIsResizingAgent(true)}
+              onKeyDown={handleAgentSeparatorKeyDown}
               style={{
                 position: 'absolute',
                 top: 0,

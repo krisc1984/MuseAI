@@ -27,6 +27,20 @@ const DEFAULT_AGENT_WIDTH = 420;
 const MIN_AGENT_WIDTH = 380;
 const MAX_AGENT_WIDTH = 860;
 const EDITOR_MIN_WIDTH = 400;
+const RESIZE_KEYBOARD_STEP = 16;
+const AI_SUB_SCORE_KEYS = ['可预测的节奏', '功能性用词', '机械式写作', '可预测的句法', '缺乏创造性语法', '实用主义词汇', '单调的句法', '机械般的正式感'];
+const AI_SCORE_FIELDS = [
+  { name: '可预测的节奏', max: 12.5 },
+  { name: '功能性用词', max: 12.5 },
+  { name: '机械式写作', max: 12.5 },
+  { name: '可预测的句法', max: 12.5 },
+  { name: '缺乏创造性语法', max: 12.5 },
+  { name: '实用主义词汇', max: 12.5 },
+  { name: '单调的句法', max: 12.5 },
+  { name: '机械般的正式感', max: 12.5 }
+];
+
+const clampDimension = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 interface VersionInfo {
   id: string;
@@ -458,6 +472,20 @@ const DeAi: React.FC = () => {
     setRemoverInput(undefined);
   };
 
+  const handleDirectorySeparatorKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowRight' ? RESIZE_KEYBOARD_STEP : -RESIZE_KEYBOARD_STEP;
+    setDirectoryWidth(Math.max(directoryWidth + delta, MIN_DIRECTORY_WIDTH));
+  };
+
+  const handleAgentSeparatorKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowLeft' ? RESIZE_KEYBOARD_STEP : -RESIZE_KEYBOARD_STEP;
+    setAgentWidth(clampDimension(agentWidth + delta, MIN_AGENT_WIDTH, MAX_AGENT_WIDTH));
+  };
+
 
   const mapReferenceTreeData = (nodes: FileNode[]): any[] => nodes.map((node) => ({
     title: <span title={node.path}>{node.name}</span>,
@@ -471,10 +499,9 @@ const DeAi: React.FC = () => {
   if (suggestion) {
     try {
       parsedAssessment = JSON.parse(suggestion);
-      const subScoreKeys = ['可预测的节奏', '功能性用词', '机械式写作', '可预测的句法', '缺乏创造性语法', '实用主义词汇', '单调的句法', '机械般的正式感'];
       let sum = 0;
       let hasSubScores = false;
-      for (const key of subScoreKeys) {
+      for (const key of AI_SUB_SCORE_KEYS) {
         if (typeof parsedAssessment[key] === 'number') {
           sum += parsedAssessment[key];
           hasSubScores = true;
@@ -489,17 +516,6 @@ const DeAi: React.FC = () => {
       // not json
     }
   }
-
-  const aiScoreFields = [
-    { name: '可预测的节奏', max: 12.5 },
-    { name: '功能性用词', max: 12.5 },
-    { name: '机械式写作', max: 12.5 },
-    { name: '可预测的句法', max: 12.5 },
-    { name: '缺乏创造性语法', max: 12.5 },
-    { name: '实用主义词汇', max: 12.5 },
-    { name: '单调的句法', max: 12.5 },
-    { name: '机械般的正式感', max: 12.5 }
-  ];
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden', background: '#faf9f5' }}>
@@ -607,7 +623,9 @@ const DeAi: React.FC = () => {
           aria-label="调整目录宽度"
           aria-orientation="vertical"
           role="separator"
+          tabIndex={0}
           onMouseDown={() => setIsResizingDirectory(true)}
+          onKeyDown={handleDirectorySeparatorKeyDown}
           style={{
             position: 'absolute',
             top: 0,
@@ -702,7 +720,7 @@ const DeAi: React.FC = () => {
                   content={
                     parsedAssessment ? (
                       <div style={{ minWidth: 200 }}>
-                        {aiScoreFields.map(field => (
+                        {AI_SCORE_FIELDS.map(field => (
                           <div key={field.name} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                             <span>{field.name}</span>
                             <span>{typeof parsedAssessment[field.name] === 'number' ? parsedAssessment[field.name] : 0}/{field.max}</span>
@@ -714,10 +732,11 @@ const DeAi: React.FC = () => {
                     )
                   }
                 >
-                  <div 
+                  <button
+                    type="button"
                     className="de-ai-score-pill" 
                     aria-label={`AI味评分${displayScore === null ? '暂无' : displayScore}`}
-                    style={{ cursor: 'pointer' }}
+                    style={{ cursor: 'pointer', border: 0, background: 'transparent', padding: 0 }}
                     onClick={() => {
                       if (parsedAssessment) {
                         setIsScoreModalOpen(true);
@@ -733,14 +752,14 @@ const DeAi: React.FC = () => {
                       format={() => displayScore === null ? '--' : `${displayScore}`}
                       strokeColor={displayScore === null ? '#e8e8e8' : undefined}
                     />
-                  </div>
+                  </button>
                 </Popover>
                 <ScoreDetailsModal 
                   isOpen={isScoreModalOpen} 
                   onClose={() => setIsScoreModalOpen(false)} 
                   parsedAssessment={parsedAssessment} 
                   totalScore={displayScore ?? 0}
-                  scoreFields={aiScoreFields}
+                  scoreFields={AI_SCORE_FIELDS}
                   title="AI味综合评分"
                   chartTitle="AI特征多维雷达图"
                 />
@@ -809,7 +828,9 @@ const DeAi: React.FC = () => {
             aria-label="调整 Agent 宽度"
             aria-orientation="vertical"
             role="separator"
+            tabIndex={0}
             onMouseDown={() => setIsResizingAgent(true)}
+            onKeyDown={handleAgentSeparatorKeyDown}
             style={{
               position: 'absolute',
               top: 0,

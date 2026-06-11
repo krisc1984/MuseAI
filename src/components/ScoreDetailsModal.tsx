@@ -5,6 +5,9 @@ import { ScoreRadarChart } from './ScoreRadarChart';
 
 const { Title, Paragraph, Text } = Typography;
 
+const DEFAULT_SCORE_FIELDS = ['引流能力', '开局钩子', '设定新鲜感', '情绪爽点密度', '人设代入与话题性'];
+const SUGGESTION_KEYS = new Set(['综合建议', '优化建议', '建议', '改进方向', '整体评价']);
+
 interface ScoreDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -28,7 +31,7 @@ export const ScoreDetailsModal: React.FC<ScoreDetailsModalProps> = ({
     if (!parsedAssessment) return null;
     const fields = scoreFields && scoreFields.length > 0
       ? scoreFields
-      : ['引流能力', '开局钩子', '设定新鲜感', '情绪爽点密度', '人设代入与话题性'];
+      : DEFAULT_SCORE_FIELDS;
     const dimensions = fields.map((item) => {
       if (typeof item === 'string') {
         return { name: item, max: 20 };
@@ -50,10 +53,8 @@ export const ScoreDetailsModal: React.FC<ScoreDetailsModalProps> = ({
     const texts: { label: string; text: string }[] = [];
     
     // Some common keys that might be used for suggestions
-    const suggestionKeys = ['综合建议', '优化建议', '建议', '改进方向', '整体评价'];
-    
     for (const key of Object.keys(parsedAssessment)) {
-      if (suggestionKeys.includes(key) && typeof parsedAssessment[key] === 'string') {
+      if (SUGGESTION_KEYS.has(key) && typeof parsedAssessment[key] === 'string') {
         texts.push({ label: key, text: parsedAssessment[key] });
       }
     }
@@ -127,8 +128,8 @@ export const ScoreDetailsModal: React.FC<ScoreDetailsModalProps> = ({
           
           {suggestions.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {suggestions.map((item, idx) => (
-                <div key={idx} style={{ 
+              {suggestions.map((item) => (
+                <div key={item.label} style={{
                   backgroundColor: '#ffffff', 
                   padding: 16, 
                   borderRadius: 8,

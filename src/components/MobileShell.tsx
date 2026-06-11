@@ -2,17 +2,17 @@ import React from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { HomeOutlined, MessageOutlined, FireOutlined, HeartOutlined } from '@ant-design/icons';
 
+const MOBILE_NAV_ITEMS = [
+  { key: '/', label: '首页', icon: <HomeOutlined /> },
+  { key: '/chat', label: '聊天', icon: <MessageOutlined /> },
+  { key: '/story', label: '冒险', icon: <FireOutlined /> },
+  { key: '/bond', label: '羁绊', icon: <HeartOutlined /> },
+];
+
 const MobileShell: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const currentPath = location.pathname;
-
-  const navItems = [
-    { key: '/', label: '首页', icon: <HomeOutlined /> },
-    { key: '/chat', label: '聊天', icon: <MessageOutlined /> },
-    { key: '/story', label: '冒险', icon: <FireOutlined /> },
-    { key: '/bond', label: '羁绊', icon: <HeartOutlined /> },
-  ];
 
   return (
     <div className="mobile-shell" data-testid="mobile-shell">
@@ -31,11 +31,14 @@ const MobileShell: React.FC = () => {
 
       {/* Bottom Navigation */}
       <div className="mobile-shell__nav">
-        {navItems.map((item) => {
+        {MOBILE_NAV_ITEMS.map((item) => {
           const isActive = currentPath === item.key;
           return (
-            <div
+            <button
               key={item.key}
+              type="button"
+              aria-label={item.label}
+              aria-current={isActive ? 'page' : undefined}
               onClick={() => navigate(item.key)}
               style={{
                 display: 'flex',
@@ -47,6 +50,10 @@ const MobileShell: React.FC = () => {
                 cursor: 'pointer',
                 color: isActive ? '#d97757' : '#8c8880',
                 transition: 'color 0.2s ease',
+                border: 0,
+                background: 'transparent',
+                padding: 0,
+                font: 'inherit',
               }}
             >
               <div style={{ fontSize: '20px', marginBottom: '2px' }}>
@@ -55,7 +62,7 @@ const MobileShell: React.FC = () => {
               <span style={{ fontSize: '11px', fontWeight: isActive ? 600 : 400 }}>
                 {item.label}
               </span>
-            </div>
+            </button>
           );
         })}
       </div>
