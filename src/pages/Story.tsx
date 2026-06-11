@@ -55,6 +55,12 @@ const estimateContextUsage = (systemPrompt: string, messages: Message[], draft: 
   };
 };
 
+const formatBookTravelUserInput = (text: string, mode: 'speech' | 'behavior' | 'plot') => {
+  if (mode === 'speech') return `【说话】${text}`;
+  if (mode === 'behavior') return `【行为】${text}`;
+  return `【剧情推进】${text}`;
+};
+
 
 const cleanAndParseJSON = (rawStr: unknown): any => {
   if (typeof rawStr !== 'string') {
@@ -250,6 +256,84 @@ const savedProgressDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   minute: '2-digit',
 });
 
+let bookTravelStreamListenerReady: Promise<void> | null = null;
+const bookTravelStreamResolvers = new Map<string, {
+  resolve: (content: string) => void;
+  reject: (error: string) => void;
+}>();
+
+const ensureBookTravelStreamListener = () => {
+  if (!bookTravelStreamListenerReady) {
+    bookTravelStreamListenerReady = listen<any>('book-travel-stream', (event) => {
+      const { runId, eventType, delta, message: eventMessage } = event.payload;
+      const store = useBookTravelStore.getState();
+      const activeRunId = store.streamRuntime.runId;
+      if (!activeRunId && !bookTravelStreamResolvers.has(runId)) return;
+      if (activeRunId && runId !== activeRunId) return;
+
+      if (eventType === 'delta' && delta) {
+        if (store.streamRuntime.phase === 'planner') {
+          store.setBookTravelStreamPlannerOutput((prev) => prev + delta);
+        } else if (store.streamRuntime.phase === 'writer') {
+          store.setBookTravelStreamWriterOutput((prev) => prev + delta);
+        }
+        return;
+      }
+
+      if (eventType === 'done') {
+        bookTravelStreamResolvers.get(runId)?.resolve(eventMessage || '');
+        bookTravelStreamResolvers.delete(runId);
+        return;
+      }
+
+      if (eventType === 'error') {
+        bookTravelStreamResolvers.get(runId)?.reject(eventMessage || '未知错误');
+        bookTravelStreamResolvers.delete(runId);
+      }
+    }).then(() => undefined);
+  }
+  return bookTravelStreamListenerReady;
+};
+
+const runBookTravelStreamTask = async (commandName: string, request: any, extraArgs?: Record<string, unknown>) => {
+  await ensureBookTravelStreamListener();
+  return new Promise<string>((resolve, reject) => {
+    if (useBookTravelStore.getState().streamRuntime.phase === 'cancelled') {
+      reject('用户中断');
+      return;
+    }
+    invoke<{ runId: string }>(commandName, { request, ...extraArgs })
+      .then((result) => {
+        if (useBookTravelStore.getState().streamRuntime.phase === 'cancelled') {
+          void invoke('stop_book_travel_stream', { runId: result.runId }).catch((error) => {
+            console.error('停止穿书流失败:', error);
+          });
+          reject('用户中断');
+          return;
+        }
+        bookTravelStreamResolvers.set(result.runId, { resolve, reject });
+        useBookTravelStore.getState().setBookTravelStreamRunId(result.runId);
+      })
+      .catch((err) => {
+        reject(String(err));
+      });
+  });
+};
+
+const cancelBookTravelStream = async () => {
+  const store = useBookTravelStore.getState();
+  const runId = store.streamRuntime.runId;
+  store.setBookTravelStreamPhase('cancelled');
+  if (!runId) return;
+  bookTravelStreamResolvers.get(runId)?.reject('用户中断');
+  bookTravelStreamResolvers.delete(runId);
+  await invoke('stop_book_travel_stream', { runId });
+};
+
+const isBookTravelStreamCancelled = (err?: unknown) => (
+  String(err) === '用户中断' || useBookTravelStore.getState().streamRuntime.phase === 'cancelled'
+);
+
 const Story: React.FC = () => {
   const {
     messages, setMessages,
@@ -273,16 +357,23 @@ const Story: React.FC = () => {
 
   // Book-travel stream states
   const [, setIsTransitioningScene] = useState(false);
-  const [isBookTravelSubmitting, setIsBookTravelSubmitting] = useState(false);
-  const [startProgressPhase, setStartProgressPhase] = useState<'planner' | 'writer' | 'done' | 'error' | 'cancelled'>('done');
-  const [plannerOutput, setPlannerOutput] = useState('');
-  const [writerOutput, setWriterOutput] = useState('');
-  const [startProgressError, setStartProgressError] = useState('');
-  const [startElapsedMs, setStartElapsedMs] = useState(0);
-  const [startProgressOpen, setStartProgressOpen] = useState(false);
-  const startRunIdRef = useRef<string | null>(null);
-  const startResolverRef = useRef<{ resolve: (content: string) => void; reject: (error: string) => void } | null>(null);
-  const startCancelledRef = useRef(false);
+  const [streamNowMs, setStreamNowMs] = useState(Date.now());
+  const {
+    phase: startProgressPhase,
+    plannerOutput,
+    writerOutput,
+    error: startProgressError,
+    startedAt: startProgressStartedAt,
+    progressOpen: startProgressOpen,
+    isSubmitting: isBookTravelSubmitting,
+  } = bookTravelStore.streamRuntime;
+  const startElapsedMs = startProgressStartedAt ? Math.max(0, streamNowMs - startProgressStartedAt) : 0;
+  const setIsBookTravelSubmitting = bookTravelStore.setBookTravelStreamSubmitting;
+  const setStartProgressPhase = bookTravelStore.setBookTravelStreamPhase;
+  const setPlannerOutput = bookTravelStore.setBookTravelStreamPlannerOutput;
+  const setWriterOutput = bookTravelStore.setBookTravelStreamWriterOutput;
+  const setStartProgressError = bookTravelStore.setBookTravelStreamError;
+  const setStartProgressOpen = bookTravelStore.setBookTravelStreamProgressOpen;
 
   const buildBookTravelRequest = (
     role: string,
@@ -316,34 +407,12 @@ const Story: React.FC = () => {
     systemPrompt,
   });
 
-  const runBookTravelStreamTask = async (commandName: string, request: any, extraArgs?: Record<string, unknown>) => {
-    return new Promise<string>((resolve, reject) => {
-      if (startCancelledRef.current) {
-        reject('用户中断');
-        return;
-      }
-      startResolverRef.current = { resolve, reject };
-      invoke<{ runId: string }>(commandName, { request, ...extraArgs })
-        .then((result) => {
-          startRunIdRef.current = result.runId;
-        })
-        .catch((err) => {
-          reject(String(err));
-        });
-    });
-  };
-
   const handleCancelStart = async () => {
-    startCancelledRef.current = true;
-    startResolverRef.current?.reject('用户中断');
-    if (startRunIdRef.current) {
-      try {
-        await invoke('stop_book_travel_stream', { runId: startRunIdRef.current });
-      } catch (e) {
-        console.error('停止穿书流失败:', e);
-      }
+    try {
+      await cancelBookTravelStream();
+    } catch (e) {
+      console.error('停止穿书流失败:', e);
     }
-    setStartProgressPhase('cancelled');
   };
 
 
@@ -513,36 +582,6 @@ const Story: React.FC = () => {
     };
   }, []);
 
-  // Listen to book-travel stream events
-  useEffect(() => {
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    listen<any>('book-travel-stream', (event) => {
-      if (!active) return;
-      const { runId, eventType, delta, message: eventMessage } = event.payload;
-      if (startRunIdRef.current && runId !== startRunIdRef.current) return;
-      if (eventType === 'delta' && delta) {
-        if (startProgressPhase === 'planner') {
-          setPlannerOutput((prev) => prev + delta);
-        } else if (startProgressPhase === 'writer') {
-          setWriterOutput((prev) => prev + delta);
-        }
-      }
-      if (eventType === 'done') {
-        startResolverRef.current?.resolve(eventMessage || '');
-      }
-      if (eventType === 'error') {
-        startResolverRef.current?.reject(eventMessage || '未知错误');
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      active = false;
-      if (unlisten) unlisten();
-    };
-  }, [startProgressPhase]);
-
   const scrollToBottomOnce = () => {
     window.requestAnimationFrame(() => {
       if (chatHistoryRef.current) {
@@ -556,6 +595,13 @@ const Story: React.FC = () => {
       scrollToBottomOnce();
     }
   }, [messages.length]);
+
+  useEffect(() => {
+    if (startProgressPhase !== 'planner' && startProgressPhase !== 'writer') return;
+    setStreamNowMs(Date.now());
+    const timer = window.setInterval(() => setStreamNowMs(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [startProgressPhase]);
 
   const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId) || null;
   const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
@@ -599,24 +645,12 @@ const Story: React.FC = () => {
   const currentBookTravelSceneTitle = currentBookTravelScene?.title?.trim();
 
   const restartBookTravelAdventure = () => {
-    startCancelledRef.current = true;
-    if (startRunIdRef.current) {
-      void invoke('stop_book_travel_stream', { runId: startRunIdRef.current }).catch((error) => {
-        console.error('停止穿书流失败:', error);
-      });
-    }
+    void cancelBookTravelStream().catch((error) => {
+      console.error('停止穿书流失败:', error);
+    });
     createNewSession();
     useBookTravelStore.getState().resetSession();
     setIsTransitioningScene(false);
-    setIsBookTravelSubmitting(false);
-    setStartProgressOpen(false);
-    setStartProgressPhase('done');
-    setPlannerOutput('');
-    setWriterOutput('');
-    setStartProgressError('');
-    setStartElapsedMs(0);
-    startRunIdRef.current = null;
-    startResolverRef.current = null;
   };
 
 
@@ -721,7 +755,7 @@ const Story: React.FC = () => {
     const writerOutputStr = await runBookTravelStreamTask(
       'start_write_book_travel_change_scene_stream',
       writerRequest,
-      { userInput: writerInstructions, allowedSpeakers: plannedScene.activeCharacters || [] },
+      { userInput, allowedSpeakers: plannedScene.activeCharacters || [] },
     );
     const writerOutput = cleanAndParseJSON(writerOutputStr);
     const newBeat = appendWriterBeatToCurrentScene(writerOutput);
@@ -776,11 +810,7 @@ const Story: React.FC = () => {
     setStartProgressPhase('writer');
     setWriterOutput('');
     setStartProgressError('');
-    setStartElapsedMs(0);
-    startCancelledRef.current = false;
-    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
     try {
-      elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
       const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns } = useBookTravelStore.getState();
       if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
       const materials = {
@@ -811,7 +841,7 @@ const Story: React.FC = () => {
       }
       setStartProgressPhase('done');
     } catch (err: any) {
-      if (startCancelledRef.current) {
+      if (isBookTravelStreamCancelled(err)) {
         message.info('已中断');
         if (turnId) {
           useBookTravelStore.getState().updateTurn(turnId, {
@@ -838,10 +868,7 @@ const Story: React.FC = () => {
         setStartProgressPhase('error');
       }
     } finally {
-      if (elapsedInterval) clearInterval(elapsedInterval);
       setIsTransitioningScene(false);
-      startRunIdRef.current = null;
-      startResolverRef.current = null;
     }
   };
 
@@ -851,15 +878,11 @@ const Story: React.FC = () => {
     setStartProgressPhase('planner');
     setPlannerOutput('');
     setStartProgressError('');
-    setStartElapsedMs(0);
-    startCancelledRef.current = false;
-    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
     let failedStage: 'planning' | 'writing' = 'planning';
     let plan: any = null;
     let plannedScene: BookTravelScene | null = null;
     let newCurrentState: unknown = null;
     try {
-      elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
       const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns, userCharacter } = useBookTravelStore.getState();
       if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
       const materials = {
@@ -914,7 +937,7 @@ const Story: React.FC = () => {
       setStartProgressPhase('done');
       message.success('已切换至新场景！');
     } catch (err: any) {
-      if (startCancelledRef.current) {
+      if (isBookTravelStreamCancelled(err)) {
         message.info('已中断');
         if (turnId) {
           useBookTravelStore.getState().updateTurn(turnId, {
@@ -946,10 +969,7 @@ const Story: React.FC = () => {
         setStartProgressPhase('error');
       }
     } finally {
-      if (elapsedInterval) clearInterval(elapsedInterval);
       setIsTransitioningScene(false);
-      startRunIdRef.current = null;
-      startResolverRef.current = null;
     }
   };
 
@@ -976,11 +996,7 @@ const Story: React.FC = () => {
     setStartProgressPhase('writer');
     setWriterOutput('');
     setStartProgressError('');
-    setStartElapsedMs(0);
-    startCancelledRef.current = false;
-    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
     try {
-      elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
       const store = useBookTravelStore.getState();
       const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel } = store;
       if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
@@ -1008,7 +1024,7 @@ const Story: React.FC = () => {
       setStartProgressPhase('done');
       message.success('场景写手已重试完成');
     } catch (err: any) {
-      if (startCancelledRef.current) {
+      if (isBookTravelStreamCancelled(err)) {
         message.info('已中断');
         useBookTravelStore.getState().updateTurn(turn.id, {
           status: 'error',
@@ -1028,11 +1044,8 @@ const Story: React.FC = () => {
         setStartProgressPhase('error');
       }
     } finally {
-      if (elapsedInterval) clearInterval(elapsedInterval);
       setIsTransitioningScene(false);
       setIsBookTravelSubmitting(false);
-      startRunIdRef.current = null;
-      startResolverRef.current = null;
     }
   };
 
@@ -1056,15 +1069,10 @@ const Story: React.FC = () => {
     setStartProgressPhase('planner');
     setPlannerOutput('');
     setStartProgressError('');
-    setStartElapsedMs(0);
-    startCancelledRef.current = false;
 
-    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
     let openingTurnId: string | null = null;
     let plannerCompleted = false;
     try {
-      elapsedInterval = setInterval(() => setStartElapsedMs((prev) => prev + 100), 100);
-
       const entryPoint = bookTravelStore.entryPoints.find(ep => ep.id === selectedEntryPointId);
       if (!entryPoint) throw new Error('选中的入场点不存在');
 
@@ -1139,7 +1147,7 @@ const Story: React.FC = () => {
       setStartProgressPhase('done');
       message.success('穿书冒险已开始！');
     } catch (err: any) {
-      if (startCancelledRef.current) {
+      if (isBookTravelStreamCancelled(err)) {
         message.info('已中断穿书开始');
         if (openingTurnId) {
           useBookTravelStore.getState().updateTurn(openingTurnId, {
@@ -1164,10 +1172,7 @@ const Story: React.FC = () => {
         console.error(err);
       }
     } finally {
-      if (elapsedInterval) clearInterval(elapsedInterval);
       setIsTransitioningScene(false);
-      startRunIdRef.current = null;
-      startResolverRef.current = null;
     }
   };
 
@@ -1176,6 +1181,7 @@ const Story: React.FC = () => {
     if (!trimmed || isStreaming || isBookTravelBusy) return;
 
     if (isActiveBookTravelScene) {
+      const formattedBookTravelInput = formatBookTravelUserInput(trimmed, inputMode);
       setIsBookTravelSubmitting(true);
       setInput('');
       const pendingTurnId = `turn-${Date.now()}`;
@@ -1188,7 +1194,7 @@ const Story: React.FC = () => {
         }
         useBookTravelStore.getState().appendTurn({
           id: pendingTurnId,
-          userInput: trimmed,
+          userInput: formattedBookTravelInput,
           status: 'classifying',
           narrativeOutput: '',
           stateSnapshot: useBookTravelStore.getState().currentState,
@@ -1222,16 +1228,16 @@ const Story: React.FC = () => {
         );
         const classificationResult = await invoke<{ classification: 'insert-beat' | 'change-scene' }>('classify_book_travel_input', {
           request: classifierRequest,
-          userInput: trimmed,
+          userInput: formattedBookTravelInput,
         });
         switch (classificationResult.classification) {
           case 'insert-beat':
             useBookTravelStore.getState().updateTurn(pendingTurnId, { classification: 'insert-beat', status: 'writing', failedStage: undefined });
-            await handleInsertBeatStream(trimmed, pendingTurnId);
+            await handleInsertBeatStream(formattedBookTravelInput, pendingTurnId);
             break;
           case 'change-scene':
             useBookTravelStore.getState().updateTurn(pendingTurnId, { classification: 'change-scene', status: 'writing', failedStage: undefined });
-            await handleChangeSceneStream(trimmed, pendingTurnId);
+            await handleChangeSceneStream(formattedBookTravelInput, pendingTurnId);
             break;
           default: message.warning('无法识别输入意图，请重新输入');
         }

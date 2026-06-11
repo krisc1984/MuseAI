@@ -186,6 +186,8 @@ describe('Settings store default exports', () => {
     expect(defaultBookTravelEntryDirectorPrompt).toContain('穿书入场导演');
     expect(defaultBookTravelPlotPlannerPrompt).toContain('穿书剧情规划师');
     expect(defaultBookTravelSceneWriterPrompt).toContain('穿书场景写手');
+    expect(defaultBookTravelSceneWriterPrompt).toContain('【说话】');
+    expect(defaultBookTravelSceneWriterPrompt).toContain('【剧情推进】');
     expect(defaultBookTravelPlotPlannerPrompt).toContain('activeCharacters');
     expect(defaultBookTravelPlotPlannerPrompt).toContain('time');
     expect(defaultBookTravelPlotPlannerPrompt).toContain('location');

@@ -167,6 +167,8 @@ function resetStoryBookTravelStores() {
   });
   useStoryStore.setState({
     messages: [],
+    input: '',
+    inputMode: 'speech',
     selectedWorldBookId: null,
     selectedCharacterCardIds: [],
     initialPlot: '',
@@ -494,7 +496,7 @@ describe('Story book-travel mode', () => {
     const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
     fireEvent.click(sendButton);
 
-    expect(await screen.findByText('查看窗外动静')).toBeInTheDocument();
+    expect(await screen.findByText(/查看窗外动静/)).toBeInTheDocument();
 
     fireEvent.change(inputBox, { target: { value: '继续追问' } });
     expect(sendButton).toBeDisabled();
@@ -542,13 +544,15 @@ describe('Story book-travel mode', () => {
     const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
     fireEvent.click(sendButton);
 
-    expect(await screen.findByText('去正厅见沈家人')).toBeInTheDocument();
+    expect(await screen.findByText(/去正厅见沈家人/)).toBeInTheDocument();
     expect(screen.getByText('正在识别行动...')).toBeInTheDocument();
 
     classification.resolve({ classification: 'change-scene' });
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('start_plan_book_travel_scene_stream', expect.anything());
     });
+    const plannerCall = invokeMock.mock.calls.find(([command]) => command === 'start_plan_book_travel_scene_stream');
+    expect(plannerCall?.[1].userInput).toBe('【说话】去正厅见沈家人');
     emitBookTravelEvent({
       runId: 'planner-run',
       eventType: 'done',
@@ -571,6 +575,11 @@ describe('Story book-travel mode', () => {
     });
 
     expect(await screen.findByText('沈府正厅')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('start_write_book_travel_change_scene_stream', expect.anything());
+    });
+    const writerCall = invokeMock.mock.calls.find(([command]) => command === 'start_write_book_travel_change_scene_stream');
+    expect(writerCall?.[1].userInput).toBe('【说话】去正厅见沈家人');
     expect(screen.getByText(/地点：沈府正厅/)).toBeInTheDocument();
     const situationCards = screen.getAllByTestId('scene-situation-card');
     expect(situationCards[situationCards.length - 1]).toHaveTextContent('当前局势：正厅灯火通明，沈家长辈都在等她开口。');
@@ -612,7 +621,7 @@ describe('Story book-travel mode', () => {
     const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
     fireEvent.click(sendButton);
 
-    expect(await screen.findByText('转去偏院搜证')).toBeInTheDocument();
+    expect(await screen.findByText(/转去偏院搜证/)).toBeInTheDocument();
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('start_plan_book_travel_scene_stream', expect.anything());
     });
@@ -725,5 +734,80 @@ describe('Story book-travel mode', () => {
     expect(classifyCall?.[1].request.systemPrompt).toContain('insert-beat');
     expect(classifyCall?.[1].request.systemPrompt).toContain('change-scene');
     expect(classifyCall?.[1].request.systemPrompt).not.toContain('meta');
+  });
+
+  it('passes the selected book-travel input mode prefix into the runtime calls and turn record', async () => {
+    setActiveBookTravelScene();
+
+    renderWithRouter(<Story />);
+
+    fireEvent.click(screen.getByText('角色行为'));
+    fireEvent.change(screen.getByPlaceholderText(/做点什么/), { target: { value: '抬手试探门锁' } });
+    const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
+    fireEvent.click(sendButton);
+
+    expect(await screen.findByText('【行为】抬手试探门锁')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'classify_book_travel_input',
+        expect.objectContaining({ userInput: '【行为】抬手试探门锁' }),
+      );
+    });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'start_write_book_travel_insert_beat_stream',
+        expect.objectContaining({ userInput: '【行为】抬手试探门锁' }),
+      );
+    });
+  });
+
+  it('keeps scene-writer streaming visible after leaving and returning to the story page', async () => {
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'classify_book_travel_input') return Promise.resolve({ classification: 'insert-beat' });
+      if (command === 'start_write_book_travel_insert_beat_stream') {
+        return Promise.resolve({ runId: 'persistent-insert-run' });
+      }
+      return defaultInvoke(command, args);
+    });
+    setActiveBookTravelScene();
+
+    const firstRender = renderWithRouter(<Story />);
+
+    fireEvent.change(screen.getByPlaceholderText(/说些什么/), { target: { value: '查看门外' } });
+    const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('start_write_book_travel_insert_beat_stream', expect.anything());
+    });
+    emitBookTravelEvent({
+      runId: 'persistent-insert-run',
+      eventType: 'delta',
+      delta: '{"beat":{"id":"beat-2","content":"门外有脚步',
+    });
+    expect(await screen.findByText(/门外有脚步/)).toBeInTheDocument();
+
+    firstRender.unmount();
+    emitBookTravelEvent({
+      runId: 'persistent-insert-run',
+      eventType: 'delta',
+      delta: '声越来越近',
+    });
+
+    renderWithRouter(<Story />);
+
+    expect(await screen.findByText(/门外有脚步声越来越近/)).toBeInTheDocument();
+
+    emitBookTravelEvent({
+      runId: 'persistent-insert-run',
+      eventType: 'done',
+      message: JSON.stringify({
+        beat: { id: 'beat-2', content: '门外有脚步声越来越近。' },
+        volatileMemoryPatch: { lastAction: '【说话】查看门外' },
+      }),
+    });
+
+    expect(await screen.findByText('门外有脚步声越来越近。')).toBeInTheDocument();
   });
 });

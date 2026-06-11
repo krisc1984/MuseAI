@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
@@ -15,6 +15,117 @@ interface MarkdownEditorProps {
 }
 
 type SaveStatus = 'saved' | 'saving' | 'error';
+
+interface EditorFileState {
+  content: string;
+  savedContent: string;
+  imagePreviewSrc: string;
+  loading: boolean;
+  saveStatus: SaveStatus;
+  readError: boolean;
+}
+
+type EditorFileAction =
+  | { type: 'clear' }
+  | { type: 'text-load-start' }
+  | { type: 'text-load-success'; content: string }
+  | { type: 'text-load-error'; error: unknown }
+  | { type: 'image-load-start' }
+  | { type: 'image-load-success'; src: string }
+  | { type: 'image-load-error'; error: unknown }
+  | { type: 'content-changed'; content: string }
+  | { type: 'external-refresh'; content: string }
+  | { type: 'save-success'; content: string; isLatest: boolean }
+  | { type: 'save-error' };
+
+const initialEditorFileState: EditorFileState = {
+  content: '',
+  savedContent: '',
+  imagePreviewSrc: '',
+  loading: false,
+  saveStatus: 'saved',
+  readError: false,
+};
+
+const editorFileReducer = (state: EditorFileState, action: EditorFileAction): EditorFileState => {
+  switch (action.type) {
+    case 'clear':
+      return initialEditorFileState;
+    case 'text-load-start':
+      return {
+        ...state,
+        imagePreviewSrc: '',
+        loading: true,
+        readError: false,
+      };
+    case 'text-load-success':
+      return {
+        content: action.content,
+        savedContent: action.content,
+        imagePreviewSrc: '',
+        loading: false,
+        saveStatus: 'saved',
+        readError: false,
+      };
+    case 'text-load-error':
+      return {
+        ...state,
+        content: `**读取文件失败**: ${action.error}`,
+        savedContent: '',
+        loading: false,
+        saveStatus: 'error',
+        readError: true,
+      };
+    case 'image-load-start':
+      return {
+        content: '',
+        savedContent: '',
+        imagePreviewSrc: '',
+        loading: true,
+        saveStatus: 'saved',
+        readError: false,
+      };
+    case 'image-load-success':
+      return {
+        ...state,
+        imagePreviewSrc: action.src,
+        loading: false,
+      };
+    case 'image-load-error':
+      return {
+        ...state,
+        content: `**读取图片失败**: ${action.error}`,
+        loading: false,
+        readError: true,
+      };
+    case 'content-changed':
+      return {
+        ...state,
+        content: action.content,
+        saveStatus: action.content === state.savedContent ? 'saved' : 'saving',
+      };
+    case 'external-refresh':
+      return {
+        ...state,
+        content: action.content,
+        savedContent: action.content,
+        saveStatus: 'saved',
+      };
+    case 'save-success':
+      return {
+        ...state,
+        savedContent: action.content,
+        saveStatus: action.isLatest ? 'saved' : state.saveStatus,
+      };
+    case 'save-error':
+      return {
+        ...state,
+        saveStatus: 'error',
+      };
+    default:
+      return state;
+  }
+};
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
 
@@ -237,12 +348,8 @@ const editorTheme = EditorView.theme({
 });
 
 const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = false }) => {
-  const [content, setContent] = useState('');
-  const [savedContent, setSavedContent] = useState('');
-  const [imagePreviewSrc, setImagePreviewSrc] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
-  const [readError, setReadError] = useState(false);
+  const [fileState, dispatchFileState] = useReducer(editorFileReducer, initialEditorFileState);
+  const { content, savedContent, imagePreviewSrc, loading, saveStatus, readError } = fileState;
   const editorViewRef = useRef<EditorView | null>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const latestContentRef = useRef(content);
@@ -251,6 +358,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
   const readErrorRef = useRef(readError);
   const lastKnownModifiedAtRef = useRef<number | null>(null);
   const fullSelectionIntentUntilRef = useRef(0);
+  const loadRequestIdRef = useRef(0);
 
   const extensions = useMemo<Extension[]>(() => [
     history(),
@@ -284,10 +392,12 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
 
   useEffect(() => {
     let mounted = true;
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
+    const acceptsResponse = () => mounted && loadRequestIdRef.current === requestId;
+
     if (!filePath) {
-      setContent('');
-      setSavedContent('');
-      setImagePreviewSrc('');
+      dispatchFileState({ type: 'clear' });
       lastKnownModifiedAtRef.current = null;
       return () => {
         mounted = false;
@@ -295,26 +405,18 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
     }
 
     if (isImageFile(filePath)) {
-      setContent('');
-      setSavedContent('');
-      setImagePreviewSrc('');
-      setSaveStatus('saved');
-      setReadError(false);
+      dispatchFileState({ type: 'image-load-start' });
       lastKnownModifiedAtRef.current = null;
-      setLoading(true);
       invoke<string>('read_image_data_url', { path: filePath })
         .then((src) => {
-          if (mounted) {
-            setImagePreviewSrc(src);
-            setLoading(false);
+          if (acceptsResponse()) {
+            dispatchFileState({ type: 'image-load-success', src });
           }
         })
         .catch((err) => {
           console.error('Error reading image:', err);
-          if (mounted) {
-            setReadError(true);
-            setContent(`**读取图片失败**: ${err}`);
-            setLoading(false);
+          if (acceptsResponse()) {
+            dispatchFileState({ type: 'image-load-error', error: err });
           }
         });
       return () => {
@@ -322,29 +424,21 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
       };
     }
 
-    setLoading(true);
+    dispatchFileState({ type: 'text-load-start' });
     Promise.all([
       invoke<string>('read_file', { path: filePath }),
       invoke<number>('file_modified_at', { path: filePath }),
     ])
       .then(([text, modifiedAt]) => {
-        if (mounted) {
-          setContent(text);
-          setSavedContent(text);
+        if (acceptsResponse()) {
+          dispatchFileState({ type: 'text-load-success', content: text });
           lastKnownModifiedAtRef.current = modifiedAt;
-          setSaveStatus('saved');
-          setReadError(false);
-          setLoading(false);
         }
       })
       .catch((err) => {
         console.error('Error reading file:', err);
-        if (mounted) {
-          setContent(`**读取文件失败**: ${err}`);
-          setSavedContent('');
-          setSaveStatus('error');
-          setReadError(true);
-          setLoading(false);
+        if (acceptsResponse()) {
+          dispatchFileState({ type: 'text-load-error', error: err });
         }
       });
 
@@ -358,6 +452,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
       return;
     }
 
+    const requestId = loadRequestIdRef.current;
     const pollTimer = window.setInterval(() => {
       if (loadingRef.current || readErrorRef.current || latestContentRef.current !== savedContentRef.current) {
         return;
@@ -375,14 +470,12 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
           }
 
           return invoke<string>('read_file', { path: filePath }).then((text) => {
-            if (latestContentRef.current !== savedContentRef.current) {
+            if (loadRequestIdRef.current !== requestId || latestContentRef.current !== savedContentRef.current) {
               return;
             }
 
-            setContent(text);
-            setSavedContent(text);
+            dispatchFileState({ type: 'external-refresh', content: text });
             lastKnownModifiedAtRef.current = modifiedAt;
-            setSaveStatus('saved');
           });
         })
         .catch((err) => {
@@ -402,20 +495,20 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
 
     const pathToSave = filePath;
     const contentToSave = content;
-    setSaveStatus('saving');
 
     const saveTimer = window.setTimeout(() => {
       invoke<number>('write_file', { path: pathToSave, content: contentToSave })
         .then((modifiedAt) => {
-          setSavedContent(contentToSave);
           lastKnownModifiedAtRef.current = modifiedAt;
-          if (latestContentRef.current === contentToSave) {
-            setSaveStatus('saved');
-          }
+          dispatchFileState({
+            type: 'save-success',
+            content: contentToSave,
+            isLatest: latestContentRef.current === contentToSave,
+          });
         })
         .catch((err) => {
           console.error('Error writing file:', err);
-          setSaveStatus('error');
+          dispatchFileState({ type: 'save-error' });
         });
     }, 800);
 
@@ -463,6 +556,11 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
     event.clipboardData?.setData('text/plain', textToCopy);
     event.clipboardData?.setData('text/markdown', textToCopy);
   }, [getSelectedSource]);
+  const handleCopyRef = useRef(handleCopy);
+
+  useEffect(() => {
+    handleCopyRef.current = handleCopy;
+  }, [handleCopy]);
 
   const handleEditorKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as Element | null;
@@ -475,11 +573,14 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
   }, []);
 
   useEffect(() => {
-    document.addEventListener('copy', handleCopy, true);
-    return () => {
-      document.removeEventListener('copy', handleCopy, true);
+    const handleDocumentCopy = (event: ClipboardEvent) => {
+      handleCopyRef.current(event);
     };
-  }, [handleCopy]);
+    document.addEventListener('copy', handleDocumentCopy, true);
+    return () => {
+      document.removeEventListener('copy', handleDocumentCopy, true);
+    };
+  }, []);
 
   const insertMarkdown = useCallback((before: string, after = '', placeholder = '') => {
     const view = editorViewRef.current;
@@ -530,7 +631,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
 
   const handleChange = useCallback((value: string, _viewUpdate: ViewUpdate) => {
     if (!readOnly) {
-      setContent(value);
+      dispatchFileState({ type: 'content-changed', content: value });
     }
   }, [readOnly]);
 
@@ -612,7 +713,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
                   readOnly={readOnly}
                   onChange={(event) => {
                     if (!readOnly) {
-                      setContent(event.target.value);
+                      dispatchFileState({ type: 'content-changed', content: event.target.value });
                     }
                   }}
                 />

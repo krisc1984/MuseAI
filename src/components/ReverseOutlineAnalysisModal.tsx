@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useReducer, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
@@ -96,6 +96,184 @@ interface ReverseOutlineAnalysisModalProps {
 type ArticleType = 'short' | 'long';
 type Stage = 'idle' | 'running' | 'preview' | 'retry';
 
+interface SourceLoadState {
+  articleSourceTree: SourceTree;
+  referenceSourceTree: SourceTree;
+  loadingSources: boolean;
+}
+
+interface ReverseOutlineViewState {
+  articleType: ArticleType;
+  selectedPaths: string[];
+  stage: Stage;
+  chapters: ChapterPreview[];
+  loadingPreview: boolean;
+  orderConfirmed: boolean;
+  progress: ProgressEvent | null;
+  outlineTitle: string;
+  outlineContent: string;
+  finalStreamContent: string;
+  failedBatchIndices: number[];
+  failedBatchErrors: FailedBatchError[];
+  partialSummaries: Array<Record<string, unknown>>;
+}
+
+type SourceLoadAction =
+  | { type: 'load-start' }
+  | { type: 'load-success'; articles: SourceTree; references: SourceTree }
+  | { type: 'load-failure' };
+
+type ReverseOutlineViewAction =
+  | { type: 'reset-session' }
+  | { type: 'reset-transient' }
+  | { type: 'set-article-type'; articleType: ArticleType }
+  | { type: 'set-selected-paths'; selectedPaths: string[] }
+  | { type: 'preview-reset' }
+  | { type: 'preview-start' }
+  | { type: 'preview-success'; chapters: ChapterPreview[] }
+  | { type: 'preview-failure' }
+  | { type: 'set-order-confirmed'; orderConfirmed: boolean }
+  | { type: 'start-running' }
+  | { type: 'set-stage'; stage: Stage }
+  | { type: 'set-progress'; progress: ProgressEvent }
+  | { type: 'append-final-stream'; delta: string }
+  | { type: 'result-retry'; failedBatchIndices: number[]; failedBatchErrors: FailedBatchError[]; partialSummaries: Array<Record<string, unknown>> }
+  | { type: 'result-success'; title: string; content: string }
+  | { type: 'set-outline-title'; title: string }
+  | { type: 'set-outline-content'; content: string }
+  | { type: 'finalize-partial-start'; progress: ProgressEvent };
+
+const createEmptySourceTree = (): SourceTree => ({ nodes: [], filePaths: [], nodePaths: [] });
+
+const createInitialSourceLoadState = (): SourceLoadState => ({
+  articleSourceTree: createEmptySourceTree(),
+  referenceSourceTree: createEmptySourceTree(),
+  loadingSources: false,
+});
+
+const createInitialReverseOutlineViewState = (): ReverseOutlineViewState => ({
+  articleType: 'short',
+  selectedPaths: [],
+  stage: 'idle',
+  chapters: [],
+  loadingPreview: false,
+  orderConfirmed: false,
+  progress: null,
+  outlineTitle: '',
+  outlineContent: '',
+  finalStreamContent: '',
+  failedBatchIndices: [],
+  failedBatchErrors: [],
+  partialSummaries: [],
+});
+
+const sourceLoadReducer = (state: SourceLoadState, action: SourceLoadAction): SourceLoadState => {
+  switch (action.type) {
+    case 'load-start':
+      return { ...state, loadingSources: true };
+    case 'load-success':
+      return {
+        articleSourceTree: action.articles,
+        referenceSourceTree: action.references,
+        loadingSources: false,
+      };
+    case 'load-failure':
+      return { ...state, loadingSources: false };
+    default:
+      return state;
+  }
+};
+
+const resetPreviewState = (state: ReverseOutlineViewState): ReverseOutlineViewState => ({
+  ...state,
+  chapters: [],
+  loadingPreview: false,
+  orderConfirmed: false,
+});
+
+const reverseOutlineViewReducer = (
+  state: ReverseOutlineViewState,
+  action: ReverseOutlineViewAction,
+): ReverseOutlineViewState => {
+  switch (action.type) {
+    case 'reset-session':
+      return createInitialReverseOutlineViewState();
+    case 'reset-transient':
+      return {
+        ...state,
+        stage: 'idle',
+        chapters: [],
+        loadingPreview: false,
+        orderConfirmed: false,
+        progress: null,
+        outlineTitle: '',
+        outlineContent: '',
+        finalStreamContent: '',
+        failedBatchIndices: [],
+        failedBatchErrors: [],
+        partialSummaries: [],
+      };
+    case 'set-article-type':
+      return resetPreviewState({ ...state, articleType: action.articleType });
+    case 'set-selected-paths':
+      return resetPreviewState({ ...state, selectedPaths: action.selectedPaths });
+    case 'preview-reset':
+      return resetPreviewState(state);
+    case 'preview-start':
+      return { ...state, chapters: [], loadingPreview: true, orderConfirmed: false };
+    case 'preview-success':
+      return { ...state, chapters: action.chapters, loadingPreview: false };
+    case 'preview-failure':
+      return { ...state, loadingPreview: false };
+    case 'set-order-confirmed':
+      return { ...state, orderConfirmed: action.orderConfirmed };
+    case 'start-running':
+      return { ...state, stage: 'running', progress: null, finalStreamContent: '' };
+    case 'set-stage':
+      return { ...state, stage: action.stage };
+    case 'set-progress':
+      return {
+        ...state,
+        progress: action.progress,
+        finalStreamContent: action.progress.phase === 'final' ? '' : state.finalStreamContent,
+      };
+    case 'append-final-stream':
+      return { ...state, finalStreamContent: `${state.finalStreamContent}${action.delta}` };
+    case 'result-retry':
+      return {
+        ...state,
+        failedBatchIndices: action.failedBatchIndices,
+        failedBatchErrors: action.failedBatchErrors,
+        partialSummaries: action.partialSummaries,
+        stage: 'retry',
+      };
+    case 'result-success':
+      return {
+        ...state,
+        outlineTitle: action.title,
+        outlineContent: action.content,
+        finalStreamContent: '',
+        failedBatchIndices: [],
+        failedBatchErrors: [],
+        partialSummaries: [],
+        stage: 'preview',
+      };
+    case 'set-outline-title':
+      return { ...state, outlineTitle: action.title };
+    case 'set-outline-content':
+      return { ...state, outlineContent: action.content };
+    case 'finalize-partial-start':
+      return {
+        ...state,
+        stage: 'running',
+        finalStreamContent: '',
+        progress: action.progress,
+      };
+    default:
+      return state;
+  }
+};
+
 const isTextFile = (path: string) => /\.(md|txt)$/i.test(path);
 
 const fileNameWithoutExt = (name: string) => name.replace(/\.[^.]+$/, '');
@@ -106,14 +284,17 @@ const buildSourceTree = async (path: string): Promise<SourceTree> => {
     if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
+  const treeEntries = await Promise.all(sortedItems.map(async item => ({
+    item,
+    childTree: item.is_dir ? await buildSourceTree(item.path) : null,
+  })));
   const nodes: SourceTreeNode[] = [];
   const filePaths: string[] = [];
   const nodePaths: string[] = [];
 
-  for (const item of sortedItems) {
+  for (const { item, childTree } of treeEntries) {
     if (item.is_dir) {
-      const childTree = await buildSourceTree(item.path);
-      if (childTree.nodes.length === 0) continue;
+      if (!childTree || childTree.nodes.length === 0) continue;
       nodePaths.push(item.path, ...childTree.nodePaths);
       nodes.push({
         title: <span title={item.path}>{item.name}</span>,
@@ -159,17 +340,24 @@ const collectCheckedFilePaths = (nodes: SourceTreeNode[], keySet: Set<string>) =
 };
 
 const countSelectedFiles = (tree: SourceTree, selectedPaths: string[]) => {
+  const allFilePaths = new Set(tree.filePaths);
   const selectedFilePaths = new Set<string>();
+  const selectedDirPrefixes: string[] = [];
+
   for (const selectedPath of selectedPaths) {
-    if (tree.filePaths.includes(selectedPath)) {
+    if (allFilePaths.has(selectedPath)) {
       selectedFilePaths.add(selectedPath);
       continue;
     }
-    const dirPrefix = `${selectedPath}/`;
-    tree.filePaths
-      .filter(filePath => filePath.startsWith(dirPrefix))
-      .forEach(filePath => selectedFilePaths.add(filePath));
+    selectedDirPrefixes.push(`${selectedPath}/`);
   }
+
+  for (const filePath of tree.filePaths) {
+    if (selectedDirPrefixes.some(prefix => filePath.startsWith(prefix))) {
+      selectedFilePaths.add(filePath);
+    }
+  }
+
   return selectedFilePaths.size;
 };
 
@@ -189,44 +377,78 @@ const sectionTitleStyle: React.CSSProperties = {
   fontWeight: 600,
 };
 
+type SourceGroupCheckedKeys = React.Key[] | { checked: React.Key[] };
+
+interface SourceGroupProps {
+  title: string;
+  tree: SourceTree;
+  selectedPaths: string[];
+  onCheck: (tree: SourceTree, checkedKeys: SourceGroupCheckedKeys) => void;
+}
+
+const SourceGroup: React.FC<SourceGroupProps> = ({ title, tree, selectedPaths, onCheck }) => (
+  <div>
+    <div style={sectionTitleStyle}>{title}</div>
+    <div style={sourceListStyle}>
+      {tree.nodes.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可选文章" />
+      ) : (
+        <Tree
+          blockNode
+          checkable
+          checkedKeys={selectedPaths.filter(path => tree.nodePaths.includes(path))}
+          onCheck={checkedKeys => onCheck(tree, checkedKeys)}
+          selectable={false}
+          treeData={tree.nodes}
+        />
+      )}
+    </div>
+  </div>
+);
+
 const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = ({ open, onClose }) => {
   const settings = useSettingsStore();
-  const [articleType, setArticleType] = useState<ArticleType>('short');
-  const [articleSourceTree, setArticleSourceTree] = useState<SourceTree>({ nodes: [], filePaths: [], nodePaths: [] });
-  const [referenceSourceTree, setReferenceSourceTree] = useState<SourceTree>({ nodes: [], filePaths: [], nodePaths: [] });
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
-  const [loadingSources, setLoadingSources] = useState(false);
-  const [stage, setStage] = useState<Stage>('idle');
-  const [chapters, setChapters] = useState<ChapterPreview[]>([]);
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [orderConfirmed, setOrderConfirmed] = useState(false);
-  const [progress, setProgress] = useState<ProgressEvent | null>(null);
-  const [outlineTitle, setOutlineTitle] = useState('');
-  const [outlineContent, setOutlineContent] = useState('');
-  const [finalStreamContent, setFinalStreamContent] = useState('');
-  const [failedBatchIndices, setFailedBatchIndices] = useState<number[]>([]);
-  const [failedBatchErrors, setFailedBatchErrors] = useState<FailedBatchError[]>([]);
-  const [partialSummaries, setPartialSummaries] = useState<Array<Record<string, unknown>>>([]);
+  const [sourceLoadState, dispatchSourceLoad] = useReducer(sourceLoadReducer, undefined, createInitialSourceLoadState);
+  const [viewState, dispatchView] = useReducer(
+    reverseOutlineViewReducer,
+    undefined,
+    createInitialReverseOutlineViewState,
+  );
+  const {
+    articleSourceTree,
+    referenceSourceTree,
+    loadingSources,
+  } = sourceLoadState;
+  const {
+    articleType,
+    selectedPaths,
+    stage,
+    chapters,
+    loadingPreview,
+    orderConfirmed,
+    progress,
+    outlineTitle,
+    outlineContent,
+    finalStreamContent,
+    failedBatchIndices,
+    failedBatchErrors,
+    partialSummaries,
+  } = viewState;
   const activeRunIdRef = useRef<string | null>(null);
-
-  const resetTransientState = () => {
-    setStage('idle');
-    setChapters([]);
-    setLoadingPreview(false);
-    setOrderConfirmed(false);
-    setProgress(null);
-    setOutlineTitle('');
-    setOutlineContent('');
-    setFinalStreamContent('');
-    setFailedBatchIndices([]);
-    setFailedBatchErrors([]);
-    setPartialSummaries([]);
-    activeRunIdRef.current = null;
-  };
+  const sourceLoadRequestIdRef = useRef(0);
+  const previewRequestIdRef = useRef(0);
 
   useEffect(() => {
+    const requestId = sourceLoadRequestIdRef.current + 1;
+    sourceLoadRequestIdRef.current = requestId;
+
     if (!open) return;
-    setLoadingSources(true);
+
+    let active = true;
+    dispatchView({ type: 'reset-session' });
+    activeRunIdRef.current = null;
+    dispatchSourceLoad({ type: 'load-start' });
+
     Promise.all([
       invoke<string>('get_workspace_dir', { dirType: 'articles' }),
       invoke<string>('get_workspace_dir', { dirType: 'references' }),
@@ -236,14 +458,21 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
           buildSourceTree(articlesRoot),
           buildSourceTree(referencesRoot),
         ]);
-        setArticleSourceTree(articles);
-        setReferenceSourceTree(references);
+        if (active && sourceLoadRequestIdRef.current === requestId) {
+          dispatchSourceLoad({ type: 'load-success', articles, references });
+        }
       })
       .catch(error => {
         console.error(error);
-        message.error(`加载文章失败: ${error}`);
-      })
-      .finally(() => setLoadingSources(false));
+        if (active && sourceLoadRequestIdRef.current === requestId) {
+          message.error(`加载文章失败: ${error}`);
+          dispatchSourceLoad({ type: 'load-failure' });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, [open]);
 
   useEffect(() => {
@@ -261,17 +490,14 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
 
     listen<ProgressEvent>('reverse-outline-progress', event => {
       if (!active || !acceptsRun(event.payload.runId)) return;
-      setProgress(event.payload);
-      if (event.payload.phase === 'final') {
-        setFinalStreamContent('');
-      }
+      dispatchView({ type: 'set-progress', progress: event.payload });
     }).then(fn => {
       progressUnlisten = fn;
     });
 
     listen<StreamEvent>('reverse-outline-stream', event => {
       if (!active || !acceptsRun(event.payload.runId)) return;
-      setFinalStreamContent(current => `${current}${event.payload.delta}`);
+      dispatchView({ type: 'append-final-stream', delta: event.payload.delta });
     }).then(fn => {
       streamUnlisten = fn;
     });
@@ -280,23 +506,23 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
       if (!active || !acceptsRun(event.payload.runId)) return;
       if (event.payload.error) {
         if (event.payload.failedBatchIndices && event.payload.failedBatchIndices.length > 0) {
-          setFailedBatchIndices(event.payload.failedBatchIndices);
-          setFailedBatchErrors(event.payload.failedBatchErrors || []);
-          setPartialSummaries(event.payload.partialSummaries || []);
-          setStage('retry');
+          dispatchView({
+            type: 'result-retry',
+            failedBatchIndices: event.payload.failedBatchIndices,
+            failedBatchErrors: event.payload.failedBatchErrors || [],
+            partialSummaries: event.payload.partialSummaries || [],
+          });
           return;
         }
         message.error(event.payload.error);
-        setStage('idle');
+        dispatchView({ type: 'set-stage', stage: 'idle' });
         return;
       }
-      setOutlineTitle(event.payload.title || '反向大纲');
-      setOutlineContent(event.payload.content || '');
-      setFinalStreamContent('');
-      setFailedBatchIndices([]);
-      setFailedBatchErrors([]);
-      setPartialSummaries([]);
-      setStage('preview');
+      dispatchView({
+        type: 'result-success',
+        title: event.payload.title || '反向大纲',
+        content: event.payload.content || '',
+      });
     }).then(fn => {
       resultUnlisten = fn;
     });
@@ -310,35 +536,49 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
   }, [open]);
 
   useEffect(() => {
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+
     if (!open || articleType !== 'long' || selectedPaths.length === 0) {
-      setChapters([]);
-      setOrderConfirmed(false);
+      dispatchView({ type: 'preview-reset' });
       return;
     }
-    setLoadingPreview(true);
-    invoke<ChapterPreview[]>('preview_reverse_outline_chapters', { filePaths: selectedPaths })
-      .then(result => setChapters(result))
+
+    let active = true;
+    const filePaths = [...selectedPaths];
+    dispatchView({ type: 'preview-start' });
+    invoke<ChapterPreview[]>('preview_reverse_outline_chapters', { filePaths })
+      .then(result => {
+        if (active && previewRequestIdRef.current === requestId) {
+          dispatchView({ type: 'preview-success', chapters: result });
+        }
+      })
       .catch(error => {
         console.error(error);
-        message.error(`章节预览失败: ${error}`);
-      })
-      .finally(() => setLoadingPreview(false));
-    setOrderConfirmed(false);
+        if (active && previewRequestIdRef.current === requestId) {
+          message.error(`章节预览失败: ${error}`);
+          dispatchView({ type: 'preview-failure' });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, [open, articleType, selectedPaths]);
 
   const closeModal = () => {
-    setSelectedPaths([]);
-    setArticleType('short');
-    resetTransientState();
+    dispatchView({ type: 'reset-session' });
+    activeRunIdRef.current = null;
     onClose();
   };
 
-  const updateSelectedSource = (tree: SourceTree, checkedKeys: React.Key[] | { checked: React.Key[] }) => {
+  const updateSelectedSource = (tree: SourceTree, checkedKeys: SourceGroupCheckedKeys) => {
     const keys = Array.isArray(checkedKeys) ? checkedKeys : checkedKeys.checked;
     const nextSourcePaths = collectCheckedFilePaths(tree.nodes, new Set(keys.map(String)));
-    setSelectedPaths(current => {
-      const sourcePathSet = new Set(tree.nodePaths);
-      return [...current.filter(path => !sourcePathSet.has(path)), ...nextSourcePaths];
+    const sourcePathSet = new Set(tree.nodePaths);
+    dispatchView({
+      type: 'set-selected-paths',
+      selectedPaths: [...selectedPaths.filter(path => !sourcePathSet.has(path)), ...nextSourcePaths],
     });
   };
 
@@ -389,9 +629,7 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
       longSummaryConfig,
       longFinalConfig,
     } = buildReverseOutlineRequestBase();
-    setStage('running');
-    setProgress(null);
-    setFinalStreamContent('');
+    dispatchView({ type: 'start-running' });
     activeRunIdRef.current = null;
     try {
       const result = await invoke<{ runId: string }>('start_reverse_outline_analysis', {
@@ -415,7 +653,7 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
       });
       activeRunIdRef.current = result.runId;
     } catch (error) {
-      setStage('idle');
+      dispatchView({ type: 'set-stage', stage: 'idle' });
       message.error(`反向分析失败: ${error}`);
     }
   };
@@ -425,9 +663,7 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
     const reverseOutlineConfig = settings.agentConfigs?.reverseOutline;
     const longSummaryConfig = buildStageConfig('reverseOutlineLongSummary', settings.reverseOutlineLongSummaryPrompt);
     const longFinalConfig = buildStageConfig('reverseOutlineLongFinal', settings.reverseOutlineLongFinalPrompt);
-    setStage('running');
-    setProgress(null);
-    setFinalStreamContent('');
+    dispatchView({ type: 'start-running' });
     activeRunIdRef.current = null;
     try {
       const result = await invoke<{ runId: string }>('retry_and_finalize_reverse_outline', {
@@ -451,7 +687,7 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
       });
       activeRunIdRef.current = result.runId;
     } catch (error) {
-      setStage('retry');
+      dispatchView({ type: 'set-stage', stage: 'retry' });
       message.error(`重试失败: ${error}`);
     }
   };
@@ -464,16 +700,17 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
     const reverseOutlineConfig = settings.agentConfigs?.reverseOutline;
     const longSummaryConfig = buildStageConfig('reverseOutlineLongSummary', settings.reverseOutlineLongSummaryPrompt);
     const longFinalConfig = buildStageConfig('reverseOutlineLongFinal', settings.reverseOutlineLongFinalPrompt);
-    setStage('running');
-    setFinalStreamContent('');
     activeRunIdRef.current = null;
-    setProgress({
-      runId: '',
-      phase: 'final',
-      totalChapters: partialSummaries.length,
-      successChapters: partialSummaries.length,
-      failedChapters: failedBatchIndices.length,
-      message: '正在汇总生成长篇反向大纲',
+    dispatchView({
+      type: 'finalize-partial-start',
+      progress: {
+        runId: '',
+        phase: 'final',
+        totalChapters: partialSummaries.length,
+        successChapters: partialSummaries.length,
+        failedChapters: failedBatchIndices.length,
+        message: '正在汇总生成长篇反向大纲',
+      },
     });
     try {
       const result = await invoke<{ runId: string }>('retry_and_finalize_reverse_outline', {
@@ -497,7 +734,7 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
       });
       activeRunIdRef.current = result.runId;
     } catch (error) {
-      setStage('retry');
+      dispatchView({ type: 'set-stage', stage: 'retry' });
       message.error(`汇总失败: ${error}`);
     }
   };
@@ -525,31 +762,11 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
     }
   };
 
-  const renderSourceGroup = (title: string, tree: SourceTree) => (
-    <div>
-      <div style={sectionTitleStyle}>{title}</div>
-      <div style={sourceListStyle}>
-        {tree.nodes.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可选文章" />
-        ) : (
-          <Tree
-            blockNode
-            checkable
-            checkedKeys={selectedPaths.filter(path => tree.nodePaths.includes(path))}
-            onCheck={checkedKeys => updateSelectedSource(tree, checkedKeys)}
-            selectable={false}
-            treeData={tree.nodes}
-          />
-        )}
-      </div>
-    </div>
-  );
-
   const renderSelection = () => (
     <Space orientation="vertical" size={18} style={{ width: '100%' }}>
       <Radio.Group
         value={articleType}
-        onChange={event => setArticleType(event.target.value)}
+        onChange={event => dispatchView({ type: 'set-article-type', articleType: event.target.value })}
         optionType="button"
         buttonStyle="solid"
       >
@@ -559,8 +776,18 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
 
       <Spin spinning={loadingSources}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          {renderSourceGroup('作品目录', articleSourceTree)}
-          {renderSourceGroup('范文目录', referenceSourceTree)}
+          <SourceGroup
+            title="作品目录"
+            tree={articleSourceTree}
+            selectedPaths={selectedPaths}
+            onCheck={updateSelectedSource}
+          />
+          <SourceGroup
+            title="范文目录"
+            tree={referenceSourceTree}
+            selectedPaths={selectedPaths}
+            onCheck={updateSelectedSource}
+          />
         </div>
       </Spin>
 
@@ -585,7 +812,10 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
               )}
             </div>
           </Spin>
-          <Checkbox checked={orderConfirmed} onChange={event => setOrderConfirmed(event.target.checked)}>
+          <Checkbox
+            checked={orderConfirmed}
+            onChange={event => dispatchView({ type: 'set-order-confirmed', orderConfirmed: event.target.checked })}
+          >
             我已确认章节顺序正确
           </Checkbox>
         </Space>
@@ -645,13 +875,13 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
       <Input
         aria-label="大纲标题"
         value={outlineTitle}
-        onChange={event => setOutlineTitle(event.target.value)}
+        onChange={event => dispatchView({ type: 'set-outline-title', title: event.target.value })}
         placeholder="大纲标题"
       />
       <Input.TextArea
         aria-label="大纲内容"
         value={outlineContent}
-        onChange={event => setOutlineContent(event.target.value)}
+        onChange={event => dispatchView({ type: 'set-outline-content', content: event.target.value })}
         autoSize={{ minRows: 14, maxRows: 22 }}
         placeholder="大纲内容"
       />
@@ -714,49 +944,41 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
   const selectedArticleCount = countSelectedFiles(articleSourceTree, selectedPaths);
   const selectedReferenceCount = countSelectedFiles(referenceSourceTree, selectedPaths);
 
-  const renderFooter = () => {
-    if (stage === 'preview') {
-      return (
-        <Space>
-          <Button onClick={closeModal}>取消</Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={saveOutline}>保存到大纲目录</Button>
-        </Space>
-      );
-    }
-    if (stage === 'retry') {
-      return (
-        <Space>
-          <Button onClick={closeModal}>取消</Button>
-          <Button
-            onClick={finalizeWithPartialSummaries}
-            disabled={partialSummaries.length === 0}
-          >
-            继续汇总已成功段落
-          </Button>
-          <Button
-            type="primary"
-            icon={<RedoOutlined />}
-            onClick={retryAnalysis}
-          >
-            重试失败段落
-          </Button>
-        </Space>
-      );
-    }
-    return (
-      <Space>
-        <Button onClick={closeModal} disabled={stage === 'running'}>取消</Button>
-        <Button
-          type="primary"
-          loading={stage === 'running'}
-          disabled={selectedPaths.length === 0 || (articleType === 'long' && !orderConfirmed)}
-          onClick={startAnalysis}
-        >
-          开始分析
-        </Button>
-      </Space>
-    );
-  };
+  const footerContent = stage === 'preview' ? (
+    <Space>
+      <Button onClick={closeModal}>取消</Button>
+      <Button type="primary" icon={<SaveOutlined />} onClick={saveOutline}>保存到大纲目录</Button>
+    </Space>
+  ) : stage === 'retry' ? (
+    <Space>
+      <Button onClick={closeModal}>取消</Button>
+      <Button
+        onClick={finalizeWithPartialSummaries}
+        disabled={partialSummaries.length === 0}
+      >
+        继续汇总已成功段落
+      </Button>
+      <Button
+        type="primary"
+        icon={<RedoOutlined />}
+        onClick={retryAnalysis}
+      >
+        重试失败段落
+      </Button>
+    </Space>
+  ) : (
+    <Space>
+      <Button onClick={closeModal} disabled={stage === 'running'}>取消</Button>
+      <Button
+        type="primary"
+        loading={stage === 'running'}
+        disabled={selectedPaths.length === 0 || (articleType === 'long' && !orderConfirmed)}
+        onClick={startAnalysis}
+      >
+        开始分析
+      </Button>
+    </Space>
+  );
 
   return (
     <Modal
@@ -765,7 +987,7 @@ const ReverseOutlineAnalysisModal: React.FC<ReverseOutlineAnalysisModalProps> = 
       onCancel={closeModal}
       width={820}
       destroyOnHidden
-      footer={renderFooter()}
+      footer={footerContent}
       maskClosable={stage !== 'running'}
       keyboard={stage !== 'running'}
       closable={stage !== 'running'}

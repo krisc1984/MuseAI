@@ -65,6 +65,19 @@ export interface BookTravelEnding {
   divergenceScore: number;
 }
 
+export type BookTravelStreamPhase = 'planner' | 'writer' | 'done' | 'error' | 'cancelled';
+
+export interface BookTravelStreamRuntime {
+  runId: string | null;
+  phase: BookTravelStreamPhase;
+  plannerOutput: string;
+  writerOutput: string;
+  error: string;
+  startedAt: number | null;
+  progressOpen: boolean;
+  isSubmitting: boolean;
+}
+
 export interface ResolvedMaterials {
   outline: BookTravelMaterial;
   worldBook: BookTravelMaterial;
@@ -120,6 +133,7 @@ export interface BookTravelSnapshot {
 }
 
 interface BookTravelState extends BookTravelSnapshot {
+  streamRuntime: BookTravelStreamRuntime;
   assembledMaterials: BookTravelAssembledMaterial[];
   selectedMaterialId: string | null;
   savedProgresses: BookTravelSavedProgress[];
@@ -154,7 +168,26 @@ interface BookTravelState extends BookTravelSnapshot {
   loadSavedProgress: (id: string) => void;
   restoreSession: (snapshot: Partial<BookTravelSnapshot>) => void;
   resetSession: () => void;
+  setBookTravelStreamPhase: (phase: BookTravelStreamPhase) => void;
+  setBookTravelStreamRunId: (runId: string | null) => void;
+  setBookTravelStreamPlannerOutput: (output: string | ((prev: string) => string)) => void;
+  setBookTravelStreamWriterOutput: (output: string | ((prev: string) => string)) => void;
+  setBookTravelStreamError: (error: string) => void;
+  setBookTravelStreamProgressOpen: (progressOpen: boolean) => void;
+  setBookTravelStreamSubmitting: (isSubmitting: boolean) => void;
+  resetBookTravelStreamRuntime: () => void;
 }
+
+const initialStreamRuntime: BookTravelStreamRuntime = {
+  runId: null,
+  phase: 'done',
+  plannerOutput: '',
+  writerOutput: '',
+  error: '',
+  startedAt: null,
+  progressOpen: false,
+  isSubmitting: false,
+};
 
 const initialState = {
   selectedOutline: null,
@@ -175,6 +208,7 @@ const initialState = {
   summaryMemory: '',
   isCompleted: false,
   ending: null,
+  streamRuntime: initialStreamRuntime,
 };
 
 const materialId = () => `book-travel-material-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -320,10 +354,47 @@ export const useBookTravelStore = create<BookTravelState>()(
       loadSavedProgress: (id) => {
         const progress = get().savedProgresses.find((p) => p.id === id);
         if (!progress) return;
-        set({ ...initialState, ...progress.snapshot });
+        set({ ...initialState, ...progress.snapshot, streamRuntime: initialStreamRuntime });
       },
-      restoreSession: (snapshot) => set({ ...initialState, ...snapshot }),
-      resetSession: () => set({ ...initialState, selectedMaterialId: null }),
+      restoreSession: (snapshot) => set({ ...initialState, ...snapshot, streamRuntime: initialStreamRuntime }),
+      resetSession: () => set({ ...initialState, selectedMaterialId: null, streamRuntime: initialStreamRuntime }),
+      setBookTravelStreamPhase: (phase) => set((state) => {
+        const isRunning = phase === 'planner' || phase === 'writer';
+        const isTerminal = phase === 'done' || phase === 'error' || phase === 'cancelled';
+        return {
+          streamRuntime: {
+            ...state.streamRuntime,
+            phase,
+            runId: isTerminal ? null : state.streamRuntime.runId,
+            startedAt: isRunning ? Date.now() : state.streamRuntime.startedAt,
+          },
+        };
+      }),
+      setBookTravelStreamRunId: (runId) => set((state) => ({
+        streamRuntime: { ...state.streamRuntime, runId },
+      })),
+      setBookTravelStreamPlannerOutput: (output) => set((state) => ({
+        streamRuntime: {
+          ...state.streamRuntime,
+          plannerOutput: typeof output === 'function' ? output(state.streamRuntime.plannerOutput) : output,
+        },
+      })),
+      setBookTravelStreamWriterOutput: (output) => set((state) => ({
+        streamRuntime: {
+          ...state.streamRuntime,
+          writerOutput: typeof output === 'function' ? output(state.streamRuntime.writerOutput) : output,
+        },
+      })),
+      setBookTravelStreamError: (error) => set((state) => ({
+        streamRuntime: { ...state.streamRuntime, error },
+      })),
+      setBookTravelStreamProgressOpen: (progressOpen) => set((state) => ({
+        streamRuntime: { ...state.streamRuntime, progressOpen },
+      })),
+      setBookTravelStreamSubmitting: (isSubmitting) => set((state) => ({
+        streamRuntime: { ...state.streamRuntime, isSubmitting },
+      })),
+      resetBookTravelStreamRuntime: () => set({ streamRuntime: initialStreamRuntime }),
     }),
     {
       name: 'museai-book-travel-storage',

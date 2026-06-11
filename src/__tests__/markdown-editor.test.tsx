@@ -5,6 +5,14 @@ import MarkdownEditor from '../components/MarkdownEditor';
 
 const invokeMock = vi.mocked(invoke);
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+};
+
 describe('MarkdownEditor', () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -141,5 +149,67 @@ describe('MarkdownEditor', () => {
 
     const image = await screen.findByAltText('cover.jpg');
     expect(image).toHaveAttribute('src', 'data:image/png;base64,LOCAL');
+  });
+
+  it('ignores stale text file loads after switching to another text file', async () => {
+    const firstRead = deferred<string>();
+    const firstModifiedAt = deferred<number>();
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'read_file' && args?.path?.endsWith('/first.md')) return firstRead.promise;
+      if (command === 'file_modified_at' && args?.path?.endsWith('/first.md')) return firstModifiedAt.promise;
+      if (command === 'read_file' && args?.path?.endsWith('/second.md')) return Promise.resolve('# 第二篇');
+      if (command === 'file_modified_at' && args?.path?.endsWith('/second.md')) return Promise.resolve(2);
+      if (command === 'write_file') return Promise.resolve(3);
+      return Promise.resolve(undefined);
+    });
+
+    const { rerender } = render(<MarkdownEditor filePath="/Users/test/Documents/MuseAI/articles/first.md" />);
+    rerender(<MarkdownEditor filePath="/Users/test/Documents/MuseAI/articles/second.md" />);
+
+    expect(await screen.findByDisplayValue('# 第二篇')).toBeInTheDocument();
+
+    await act(async () => {
+      firstRead.resolve('# 第一篇');
+      firstModifiedAt.resolve(1);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByDisplayValue('# 第一篇')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('# 第二篇')).toBeInTheDocument();
+  });
+
+  it('ignores stale text file loads after switching to image and empty selections', async () => {
+    const textRead = deferred<string>();
+    const textModifiedAt = deferred<number>();
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'read_file' && args?.path?.endsWith('/slow.md')) return textRead.promise;
+      if (command === 'file_modified_at' && args?.path?.endsWith('/slow.md')) return textModifiedAt.promise;
+      if (command === 'read_image_data_url') return Promise.resolve('data:image/png;base64,IMAGE');
+      if (command === 'write_file') return Promise.resolve(2);
+      return Promise.resolve(undefined);
+    });
+
+    const { rerender } = render(<MarkdownEditor filePath="/Users/test/Documents/MuseAI/articles/slow.md" />);
+    rerender(<MarkdownEditor filePath="/Users/test/Documents/MuseAI/articles/cover.png" />);
+
+    const image = await screen.findByAltText('cover.png');
+    expect(image).toHaveAttribute('src', 'data:image/png;base64,IMAGE');
+
+    await act(async () => {
+      textRead.resolve('# 过期正文');
+      textModifiedAt.resolve(1);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByDisplayValue('# 过期正文')).not.toBeInTheDocument();
+
+    rerender(<MarkdownEditor filePath={null} />);
+    expect(screen.getByText('选择左侧文件以开始阅读或编辑')).toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 850));
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith('write_file', expect.anything());
   });
 });

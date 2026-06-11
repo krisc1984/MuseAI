@@ -7,7 +7,7 @@ type EventHandler = (event: { payload: any }) => void;
 
 const eventHandlers: Record<string, EventHandler> = {};
 
-const invokeMock = vi.fn(async (command: string, args?: any) => {
+const defaultInvoke = async (command: string, args?: any) => {
   if (command === 'get_workspace_dir') {
     return args.dirType === 'articles'
       ? '/Users/test/Documents/MuseAI/articles'
@@ -52,7 +52,17 @@ const invokeMock = vi.fn(async (command: string, args?: any) => {
     return { path: '/Users/test/Documents/MuseAI/outline/反向大纲.md' };
   }
   return undefined;
-});
+};
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+};
+
+const invokeMock = vi.fn(defaultInvoke);
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (command: string, args?: unknown) => invokeMock(command, args),
@@ -72,6 +82,7 @@ const renderModal = () => render(<ReverseOutlineAnalysisModal open onClose={vi.f
 describe('ReverseOutlineAnalysisModal', () => {
   beforeEach(() => {
     invokeMock.mockClear();
+    invokeMock.mockImplementation(defaultInvoke);
     Object.keys(eventHandlers).forEach(key => delete eventHandlers[key]);
     useSettingsStore.setState({
       llmProvider: 'OpenAI',
@@ -339,5 +350,69 @@ describe('ReverseOutlineAnalysisModal', () => {
         }),
       );
     });
+  });
+
+  it('starts from clean setup state when reopened by parent state', async () => {
+    const { rerender } = render(<ReverseOutlineAnalysisModal open onClose={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByLabelText('正文B')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('正文B'));
+    expect(screen.getByText('已选择作品 1 篇，范文 0 篇')).toBeInTheDocument();
+
+    rerender(<ReverseOutlineAnalysisModal open={false} onClose={vi.fn()} />);
+    rerender(<ReverseOutlineAnalysisModal open onClose={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByLabelText('正文B')).toBeInTheDocument());
+    expect(screen.queryByText('已选择作品 1 篇，范文 0 篇')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始分析' })).toBeDisabled();
+    expect(screen.getByText('短篇')).toBeInTheDocument();
+  });
+
+  it('ignores stale long-form previews after selected files change and clears them in short mode', async () => {
+    const firstPreview = deferred<Array<{ title: string; path: string; charCount: number }>>();
+    const secondPreview = deferred<Array<{ title: string; path: string; charCount: number }>>();
+    let previewCallCount = 0;
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'preview_reverse_outline_chapters') {
+        previewCallCount += 1;
+        return previewCallCount === 1 ? firstPreview.promise : secondPreview.promise;
+      }
+      return defaultInvoke(command, args);
+    });
+
+    renderModal();
+
+    await waitFor(() => expect(screen.getByLabelText('正文B')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('正文B'));
+    fireEvent.click(screen.getByText('长篇'));
+
+    await waitFor(() => expect(previewCallCount).toBe(1));
+    fireEvent.click(screen.getByLabelText('范文A'));
+    await waitFor(() => expect(previewCallCount).toBe(2));
+
+    await act(async () => {
+      secondPreview.resolve([
+        { title: '当前章节', path: '/Users/test/Documents/MuseAI/references/范文A.txt', charCount: 2200 },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('1. 当前章节')).toBeInTheDocument();
+
+    await act(async () => {
+      firstPreview.resolve([
+        { title: '过期章节', path: '/Users/test/Documents/MuseAI/articles/正文B.md', charCount: 1100 },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('1. 过期章节')).not.toBeInTheDocument();
+    expect(screen.getByText('1. 当前章节')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('短篇'));
+
+    expect(screen.queryByText('1. 当前章节')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('我已确认章节顺序正确')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始分析' })).toBeEnabled();
   });
 });
