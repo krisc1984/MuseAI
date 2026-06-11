@@ -28,6 +28,7 @@ const MobileChat: React.FC = () => {
     expandedBlocks,
     selectedWorldBookId,
     selectedCharacterCardId,
+    selectedUserCharacterCardId,
     sessions,
     sessionId,
     sessionTitle,
@@ -39,6 +40,7 @@ const MobileChat: React.FC = () => {
     setExpandedBlocks,
     setSelectedWorldBookId,
     setSelectedCharacterCardId,
+    setSelectedUserCharacterCardId,
     setSessions,
     setSessionId,
     setSessionTitle,
@@ -111,6 +113,7 @@ const MobileChat: React.FC = () => {
         contextCompaction: null,
         isArchived: isSessionArchived,
         characterCardId: selectedCharacterCardId,
+        selectedUserCharacterCardId,
         selectedWorldBookId,
       };
       await appInvoke<AgentSessionSummary>('save_agent_session', { session: record });
@@ -136,6 +139,7 @@ const MobileChat: React.FC = () => {
       setSessionTitle(record.title);
       setMessages(record.messages || []);
       setSelectedCharacterCardId(record.characterCardId ?? record.character_card_id ?? null);
+      setSelectedUserCharacterCardId(record.selectedUserCharacterCardId ?? record.selected_user_character_card_id ?? null);
       setSelectedWorldBookId(record.selectedWorldBookId ?? record.selected_world_book_id ?? null);
       setIsSessionArchived(record.isArchived ?? record.is_archived ?? false);
     } catch (e) {
@@ -215,6 +219,7 @@ const MobileChat: React.FC = () => {
 
     // Compile Prompt
     const selectedCharacterCard = characterCards.find(cc => cc.id === selectedCharacterCardId);
+    const selectedUserCharacterCard = characterCards.find(cc => cc.id === selectedUserCharacterCardId);
     const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId);
     
     const filterBlankMarkdownFields = (content: string): string => {
@@ -246,6 +251,9 @@ const MobileChat: React.FC = () => {
     }
     if (selectedCharacterCard?.content) {
       systemPrompt += `\n\n## 你的角色人设设定（伴侣设定）\n${filterBlankMarkdownFields(selectedCharacterCard.content)}`;
+    }
+    if (selectedUserCharacterCard?.content) {
+      systemPrompt += `\n\n## 我（用户）的角色人设设定\n${filterBlankMarkdownFields(selectedUserCharacterCard.content)}`;
     }
 
     const modelMessages = nextMessages.slice(0, -1).map(msg => ({
@@ -439,6 +447,7 @@ const MobileChat: React.FC = () => {
   };
 
   const selectedCharacterCard = characterCards.find(cc => cc.id === selectedCharacterCardId);
+  const selectedUserCharacterCard = characterCards.find(cc => cc.id === selectedUserCharacterCardId);
 
   const selectOptions = sessions.map(s => ({ value: s.id, label: s.title }));
   if (sessionId && !sessions.some(s => s.id === sessionId)) {
@@ -550,25 +559,44 @@ const MobileChat: React.FC = () => {
               backgroundColor: '#faf9f5',
               borderBottom: '1px solid rgba(217, 119, 87, 0.05)',
               display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
+              flexDirection: 'column',
+              alignItems: 'stretch',
+              gap: '8px',
               flexShrink: 0,
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <BookOutlined style={{ color: '#d97757' }} />
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#33312e' }}>伴侣：{selectedCharacterCard?.name}</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <BookOutlined style={{ color: '#d97757' }} />
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#33312e' }}>伴侣：{selectedCharacterCard?.name}</span>
+                </div>
+                <span style={{ fontSize: '12px', color: '#8c8880' }}>
+                  我当前扮演：{selectedUserCharacterCard?.name || '未选择'}
+                </span>
               </div>
-              <Select
-                value={selectedWorldBookId}
-                onChange={(id) => {
-                  setSelectedWorldBookId(id);
-                  saveCurrentSession();
-                }}
-                style={{ width: '120px', fontSize: '16px' }}
-                placeholder="世界书背景..."
-                allowClear
-                options={worldBooks.map(wb => ({ value: wb.id, label: wb.name }))}
-              />
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <Select
+                  value={selectedWorldBookId}
+                  onChange={(id) => {
+                    setSelectedWorldBookId(id);
+                    saveCurrentSession();
+                  }}
+                  style={{ width: '120px', fontSize: '16px' }}
+                  placeholder="世界书背景..."
+                  allowClear
+                  options={worldBooks.map(wb => ({ value: wb.id, label: wb.name }))}
+                />
+                <Select
+                  value={selectedUserCharacterCardId}
+                  onChange={(id) => {
+                    setSelectedUserCharacterCardId(id);
+                    saveCurrentSession();
+                  }}
+                  style={{ flex: 1, fontSize: '16px' }}
+                  placeholder="切换我的人设..."
+                  allowClear
+                  options={characterCards.map(card => ({ value: card.id, label: card.name }))}
+                />
+              </div>
             </div>
 
             {/* Chat list */}

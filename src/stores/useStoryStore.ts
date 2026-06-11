@@ -18,6 +18,7 @@ interface StoryState {
   expandedBlocks: Record<string, boolean>;
   selectedWorldBookId: string | null;
   selectedCharacterCardIds: string[]; // Multi-select support!
+  selectedUserCharacterCardId: string | null;
   sessions: AgentSessionSummary[];
   sessionId: string;
   sessionTitle: string;
@@ -34,6 +35,7 @@ interface StoryState {
   setExpandedBlocks: (blocks: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => void;
   setSelectedWorldBookId: (id: string | null) => void;
   setSelectedCharacterCardIds: (ids: string[]) => void;
+  setSelectedUserCharacterCardId: (id: string | null) => void;
   setSessions: (sessions: AgentSessionSummary[]) => void;
   setSessionId: (id: string) => void;
   setSessionTitle: (title: string) => void;
@@ -55,6 +57,7 @@ export const useStoryStore = create<StoryState>()(
       expandedBlocks: {},
       selectedWorldBookId: null,
       selectedCharacterCardIds: [],
+      selectedUserCharacterCardId: null,
       sessions: [],
       sessionId: createSessionId(),
       sessionTitle: '新故事',
@@ -75,6 +78,7 @@ export const useStoryStore = create<StoryState>()(
       })),
       setSelectedWorldBookId: (selectedWorldBookId) => set({ selectedWorldBookId }),
       setSelectedCharacterCardIds: (selectedCharacterCardIds) => set({ selectedCharacterCardIds }),
+      setSelectedUserCharacterCardId: (selectedUserCharacterCardId) => set({ selectedUserCharacterCardId }),
       setSessions: (sessions) => set({ sessions }),
       setSessionId: (sessionId) => set({ sessionId }),
       setSessionTitle: (sessionTitle) => set({ sessionTitle }),
@@ -107,6 +111,7 @@ export const useStoryStore = create<StoryState>()(
       partialize: (state) => ({
         selectedWorldBookId: state.selectedWorldBookId,
         selectedCharacterCardIds: state.selectedCharacterCardIds,
+        selectedUserCharacterCardId: state.selectedUserCharacterCardId,
         initialPlot: state.initialPlot,
         dynamicRoleLoadingEnabled: state.dynamicRoleLoadingEnabled,
       }),

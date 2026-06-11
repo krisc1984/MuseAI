@@ -10,6 +10,7 @@ import Background from './pages/Background';
 import Chat from './pages/Chat';
 import Story from './pages/Story';
 import Bond from './pages/Bond';
+import Gallery from './pages/Gallery';
 
 // Mobile components
 import MobileShell from './components/MobileShell';
@@ -79,6 +80,7 @@ function App() {
             <Route path="de-ai" element={<DeAi />} />
             <Route path="outline" element={<Outline />} />
             <Route path="background" element={<Background />} />
+            <Route path="gallery" element={<Gallery />} />
             <Route path="chat" element={<Chat />} />
             <Route path="story" element={<Story />} />
             <Route path="bond" element={<Bond />} />

@@ -135,4 +135,46 @@ describe('Settings store default exports', () => {
     expect(defaultBackgroundWorldBookPrompt).toContain('世界观与人物设定专家');
     expect(defaultBackgroundCharacterCardPrompt).toContain('人物设定专家');
   });
+
+  it('should keep a separate image model configuration', () => {
+    const state = useSettingsStore.getState();
+
+    expect(state.imageModelProvider).toBe('Agnes');
+    expect(state.imageModelBaseUrl).toBe('https://apihub.agnes-ai.com/v1');
+    expect(state.imageModelName).toBe('agnes-image-2.1-flash');
+
+    state.setImageModelConfig({
+      imageModelProvider: '自定义生图',
+      imageModelBaseUrl: 'https://image.example.com/v1',
+      imageModelName: 'custom-image-model',
+      imageModelApiKey: 'image-key',
+    });
+
+    const updated = useSettingsStore.getState();
+    expect(updated.imageModelProvider).toBe('自定义生图');
+    expect(updated.imageModelBaseUrl).toBe('https://image.example.com/v1');
+    expect(updated.imageModelName).toBe('custom-image-model');
+    expect(updated.imageModelApiKey).toBe('image-key');
+  });
+
+  it('should keep a separate video model configuration', () => {
+    const state = useSettingsStore.getState();
+
+    expect(state.videoModelProvider).toBe('Agnes');
+    expect(state.videoModelBaseUrl).toBe('https://apihub.agnes-ai.com/v1');
+    expect(state.videoModelName).toBe('agnes-video-v2.0');
+
+    state.setVideoModelConfig({
+      videoModelProvider: '自定义生视频',
+      videoModelBaseUrl: 'https://video.example.com/v1',
+      videoModelName: 'custom-video-model',
+      videoModelApiKey: 'video-key',
+    });
+
+    const updated = useSettingsStore.getState();
+    expect(updated.videoModelProvider).toBe('自定义生视频');
+    expect(updated.videoModelBaseUrl).toBe('https://video.example.com/v1');
+    expect(updated.videoModelName).toBe('custom-video-model');
+    expect(updated.videoModelApiKey).toBe('video-key');
+  });
 });

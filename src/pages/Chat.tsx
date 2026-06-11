@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin } from 'antd';
+import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select } from 'antd';
 import {
   BulbOutlined,
   HistoryOutlined,
@@ -98,7 +98,8 @@ const compileEffectiveSystemPrompt = (
   basePrompt: string,
   worldBookContent: string | null,
   characterCardContent: string | null,
-  userInfo: Record<string, any>
+  userInfo: Record<string, any>,
+  userCharacterCardContent: string | null
 ): string => {
   let prompt = basePrompt.trim();
 
@@ -110,13 +111,17 @@ const compileEffectiveSystemPrompt = (
     prompt += `\n\n## 你的角色人设设定（伴侣设定）\n你必须始终扮演此角色，语气、动作、口吻、心防与性格应与本卡高度一致：\n${filterBlankMarkdownFields(characterCardContent.trim())}`;
   }
 
-  const userFields = Object.entries(userInfo)
-    .filter(([k, v]) => USER_INFO_LABELS[k] && typeof v === 'string' && v.trim() !== '')
-    .map(([k, v]) => `- **${USER_INFO_LABELS[k]}**：${v}`)
-    .join('\n');
+  if (userCharacterCardContent && userCharacterCardContent.trim()) {
+    prompt += `\n\n## 我（用户）的角色人设设定\n这是与您对话的用户角色卡，请始终将我视为这张角色卡中的人物，并据此决定互动关系、态度和说话方式：\n${filterBlankMarkdownFields(userCharacterCardContent.trim())}`;
+  } else {
+    const userFields = Object.entries(userInfo)
+      .filter(([k, v]) => USER_INFO_LABELS[k] && typeof v === 'string' && v.trim() !== '')
+      .map(([k, v]) => `- **${USER_INFO_LABELS[k]}**：${v}`)
+      .join('\n');
 
-  if (userFields) {
-    prompt += `\n\n## 我（用户）的角色人设设定\n这是与你对话的用户人设背景，请记住并据此采取对应的人物关系态度和说话方式：\n${userFields}`;
+    if (userFields) {
+      prompt += `\n\n## 我（用户）的角色人设设定\n这是与你对话的用户人设背景，请记住并据此采取对应的人物关系态度和说话方式：\n${userFields}`;
+    }
   }
 
   return prompt;
@@ -140,7 +145,8 @@ const Chat: React.FC = () => {
     input, setInput,
     isStreaming, setIsStreaming,
     expandedBlocks, setExpandedBlocks,
-    selectedWorldBookId, selectedCharacterCardId,
+    selectedWorldBookId, selectedCharacterCardId, selectedUserCharacterCardId,
+    setSelectedWorldBookId, setSelectedCharacterCardId, setSelectedUserCharacterCardId,
     userInfo,
     sessions, setSessions,
     sessionId, setSessionId,
@@ -163,6 +169,8 @@ const Chat: React.FC = () => {
   const sessionTitleRef = useRef(sessionTitle);
   const isSessionArchivedRef = useRef(isSessionArchived);
   const selectedCharacterCardIdRef = useRef(selectedCharacterCardId);
+  const selectedWorldBookIdRef = useRef(selectedWorldBookId);
+  const selectedUserCharacterCardIdRef = useRef(selectedUserCharacterCardId);
   const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -185,6 +193,8 @@ const Chat: React.FC = () => {
   useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
   useEffect(() => { isSessionArchivedRef.current = isSessionArchived; }, [isSessionArchived]);
   useEffect(() => { selectedCharacterCardIdRef.current = selectedCharacterCardId; }, [selectedCharacterCardId]);
+  useEffect(() => { selectedWorldBookIdRef.current = selectedWorldBookId; }, [selectedWorldBookId]);
+  useEffect(() => { selectedUserCharacterCardIdRef.current = selectedUserCharacterCardId; }, [selectedUserCharacterCardId]);
   useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
 
   useEffect(() => {
@@ -315,6 +325,7 @@ const Chat: React.FC = () => {
 
   const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId) || null;
   const selectedCharacterCard = characterCards.find(cc => cc.id === selectedCharacterCardId) || null;
+  const selectedUserCharacterCard = characterCards.find(cc => cc.id === selectedUserCharacterCardId) || null;
 
   // Compile final Prompt
   const baseSystemPrompt = settings.partnerChatPrompt || '';
@@ -322,7 +333,8 @@ const Chat: React.FC = () => {
     baseSystemPrompt,
     selectedWorldBook ? selectedWorldBook.content : null,
     selectedCharacterCard ? selectedCharacterCard.content : null,
-    userInfo
+    userInfo,
+    selectedUserCharacterCard ? selectedUserCharacterCard.content : null
   );
 
   const handleSend = async () => {
@@ -402,7 +414,7 @@ const Chat: React.FC = () => {
           messages: modelMessages,
           contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: [],
-          allowedTools: [] // Companion has no tools!
+          allowedTools: undefined
         }
       });
 
@@ -499,7 +511,7 @@ const Chat: React.FC = () => {
             messages: modelMessages,
             contextCompaction: contextCompactionRef.current,
             selectedReferenceFiles: [],
-            allowedTools: []
+            allowedTools: undefined
           }
         });
 
@@ -562,7 +574,7 @@ const Chat: React.FC = () => {
           messages: modelMessages,
           contextCompaction: contextCompactionRef.current,
           selectedReferenceFiles: [],
-          allowedTools: []
+          allowedTools: undefined
         }
       });
 
@@ -609,7 +621,9 @@ const Chat: React.FC = () => {
           todos: [],
           contextCompaction: contextCompactionRef.current,
           isArchived: isSessionArchivedRef.current,
-          characterCardId: selectedCharacterCardIdRef.current
+          characterCardId: selectedCharacterCardIdRef.current,
+          selectedWorldBookId: selectedWorldBookIdRef.current,
+          selectedUserCharacterCardId: selectedUserCharacterCardIdRef.current,
         }
       });
       await refreshSessions();
@@ -626,6 +640,9 @@ const Chat: React.FC = () => {
       setSessionId(session.id);
       setSessionTitle(session.title);
       setMessages(session.messages);
+      setSelectedCharacterCardId(session.characterCardId ?? null);
+      setSelectedWorldBookId(session.selectedWorldBookId ?? null);
+      setSelectedUserCharacterCardId(session.selectedUserCharacterCardId ?? null);
       contextCompactionRef.current = session.contextCompaction ?? null;
       setContextCompaction(session.contextCompaction ?? null);
       setIsStreaming(false);
@@ -910,16 +927,37 @@ const Chat: React.FC = () => {
 
       {/* Header */}
       <div className="agent-chat__header" style={{ borderBottom: '1px solid #eae6df', padding: '16px 24px' }}>
-        <div className="agent-chat__title">
-          <MessageOutlined style={{ color: '#d97757', fontSize: 18 }} />
-          <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e' }}>
-            伴侣聊天室
-            {selectedCharacterCard && (
-              <span style={{ fontSize: 13, color: '#8c8882', fontWeight: 400, marginLeft: 8 }}>
-                (已绑定: {selectedCharacterCard.name})
-              </span>
-            )}
-          </h3>
+        <div className="agent-chat__title" style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <MessageOutlined style={{ color: '#d97757', fontSize: 18 }} />
+            <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e' }}>
+              伴侣聊天室
+              {selectedCharacterCard && (
+                <span style={{ fontSize: 13, color: '#8c8882', fontWeight: 400, marginLeft: 8 }}>
+                  (已绑定: {selectedCharacterCard.name})
+                </span>
+              )}
+            </h3>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <Tag color={selectedCharacterCard ? 'orange' : 'default'} style={{ margin: 0, padding: '4px 10px', borderRadius: '999px' }}>
+              伴侣：{selectedCharacterCard?.name || '未选择'}
+            </Tag>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '12px', color: '#8c8882', whiteSpace: 'nowrap' }}>我当前扮演</span>
+              <Select
+                allowClear
+                value={selectedUserCharacterCardId}
+                placeholder="选择用户人设"
+                onChange={(value) => {
+                  setSelectedUserCharacterCardId(value);
+                  void saveCurrentSession();
+                }}
+                style={{ width: 180 }}
+                options={characterCards.map((card) => ({ value: card.id, label: card.name }))}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="agent-chat__header-actions">
@@ -1190,6 +1228,9 @@ const Chat: React.FC = () => {
             </Tag>
             <Tag icon={<UserOutlined />} color={selectedCharacterCard ? "orange" : "default"} style={{ padding: '4px 12px', fontSize: '13px', borderRadius: '4px', border: '1px solid #eae6df' }}>
               角色卡: {selectedCharacterCard ? selectedCharacterCard.name : '未绑定'}
+            </Tag>
+            <Tag color={selectedUserCharacterCard ? "orange" : "default"} style={{ padding: '4px 12px', fontSize: '13px', borderRadius: '4px', border: '1px solid #eae6df' }}>
+              我的身份: {selectedUserCharacterCard ? selectedUserCharacterCard.name : '未选择'}
             </Tag>
           </div>
         </div>

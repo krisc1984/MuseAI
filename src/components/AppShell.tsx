@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Menu, ConfigProvider, Modal, Button } from 'antd';
-import { HomeOutlined, BookOutlined, SettingOutlined, ClearOutlined, ExclamationCircleOutlined, ReadOutlined, ProfileOutlined, GlobalOutlined, MessageOutlined, CompassOutlined, HeartOutlined } from '@ant-design/icons';
+import { HomeOutlined, BookOutlined, SettingOutlined, ClearOutlined, ExclamationCircleOutlined, ReadOutlined, ProfileOutlined, GlobalOutlined, MessageOutlined, CompassOutlined, HeartOutlined, PictureOutlined } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -99,6 +99,11 @@ const AppShell: React.FC = () => {
                 key: '/background',
                 icon: <GlobalOutlined />,
                 label: '背景',
+              },
+              {
+                key: '/gallery',
+                icon: <PictureOutlined />,
+                label: '图库',
               },
               {
                 key: '/chat',

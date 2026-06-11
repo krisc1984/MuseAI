@@ -377,6 +377,186 @@ const BackgroundConcurrencyCard: React.FC = () => {
   );
 };
 
+const ImageModelConfigCard: React.FC = () => {
+  const store = useSettingsStore();
+  const [form] = Form.useForm();
+
+  React.useEffect(() => {
+    form.setFieldsValue({
+      imageModelProvider: store.imageModelProvider,
+      imageModelBaseUrl: store.imageModelBaseUrl,
+      imageModelName: store.imageModelName,
+      imageModelApiKey: store.imageModelApiKey,
+    });
+  }, [form, store.imageModelProvider, store.imageModelBaseUrl, store.imageModelName, store.imageModelApiKey]);
+
+  const handleSave = (values: any) => {
+    store.setImageModelConfig({
+      imageModelProvider: values.imageModelProvider,
+      imageModelBaseUrl: values.imageModelBaseUrl,
+      imageModelName: values.imageModelName,
+      imageModelApiKey: values.imageModelApiKey,
+    });
+    message.success('已保存生图大模型配置');
+  };
+
+  const handleReset = () => {
+    const values = {
+      imageModelProvider: 'Agnes',
+      imageModelBaseUrl: 'https://apihub.agnes-ai.com/v1',
+      imageModelName: 'agnes-image-2.1-flash',
+      imageModelApiKey: '',
+    };
+    form.setFieldsValue(values);
+    store.setImageModelConfig(values);
+    message.success('已恢复默认生图配置');
+  };
+
+  return (
+    <Card
+      style={{
+        backgroundColor: '#ffffff',
+        border: '1px solid #eae6df',
+        borderRadius: '12px',
+        boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
+        marginTop: '24px',
+      }}
+      styles={{ body: { padding: '24px' } }}
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e' }}>
+          <ThunderboltOutlined style={{ color: '#d97757' }} />
+          <span>生图大模型配置</span>
+        </div>
+      }
+    >
+      <Form form={form} layout="vertical" onFinish={handleSave} requiredMark={false}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
+          <Form.Item label="生图服务商" name="imageModelProvider" rules={[{ required: true, message: '请输入生图服务商' }]}>
+            <Input placeholder="例如：Agnes" />
+          </Form.Item>
+          <Form.Item label="生图模型名称" name="imageModelName" rules={[{ required: true, message: '请输入生图模型名称' }]}>
+            <Input placeholder="例如：agnes-image-2.1-flash" />
+          </Form.Item>
+          <Form.Item label="生图接口地址" name="imageModelBaseUrl" rules={[{ required: true, message: '请输入生图接口地址' }]}>
+            <Input placeholder="https://apihub.agnes-ai.com/v1" />
+          </Form.Item>
+          <Form.Item label="生图 API Key" name="imageModelApiKey">
+            <Input.Password placeholder="请输入生图 API Key" />
+          </Form.Item>
+        </div>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            style={{
+              backgroundColor: '#d97757',
+              borderColor: '#d97757',
+              color: '#ffffff',
+              fontWeight: 500,
+              borderRadius: '6px'
+            }}
+          >
+            保存生图配置
+          </Button>
+          <Button onClick={handleReset} style={{ borderColor: '#eae6df', color: '#5c5751', borderRadius: '6px' }}>
+            恢复默认
+          </Button>
+        </div>
+      </Form>
+    </Card>
+  );
+};
+
+const VideoModelConfigCard: React.FC = () => {
+  const store = useSettingsStore();
+  const [form] = Form.useForm();
+
+  React.useEffect(() => {
+    form.setFieldsValue({
+      videoModelProvider: store.videoModelProvider,
+      videoModelBaseUrl: store.videoModelBaseUrl,
+      videoModelName: store.videoModelName,
+      videoModelApiKey: store.videoModelApiKey,
+    });
+  }, [form, store.videoModelProvider, store.videoModelBaseUrl, store.videoModelName, store.videoModelApiKey]);
+
+  const handleSave = (values: any) => {
+    store.setVideoModelConfig({
+      videoModelProvider: values.videoModelProvider,
+      videoModelBaseUrl: values.videoModelBaseUrl,
+      videoModelName: values.videoModelName,
+      videoModelApiKey: values.videoModelApiKey,
+    });
+    message.success('已保存生视频大模型配置');
+  };
+
+  const handleReset = () => {
+    const values = {
+      videoModelProvider: 'Agnes',
+      videoModelBaseUrl: 'https://apihub.agnes-ai.com/v1',
+      videoModelName: 'agnes-video-v2.0',
+      videoModelApiKey: '',
+    };
+    form.setFieldsValue(values);
+    store.setVideoModelConfig(values);
+    message.success('已恢复默认生视频配置');
+  };
+
+  return (
+    <Card
+      style={{
+        backgroundColor: '#ffffff',
+        border: '1px solid #eae6df',
+        borderRadius: '12px',
+        boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
+        marginTop: '24px',
+      }}
+      styles={{ body: { padding: '24px' } }}
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e' }}>
+          <ThunderboltOutlined style={{ color: '#d97757' }} />
+          <span>生视频大模型配置</span>
+        </div>
+      }
+    >
+      <Form form={form} layout="vertical" onFinish={handleSave} requiredMark={false}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
+          <Form.Item label="生视频服务商" name="videoModelProvider" rules={[{ required: true, message: '请输入生视频服务商' }]}>
+            <Input placeholder="例如：Agnes" />
+          </Form.Item>
+          <Form.Item label="生视频模型名称" name="videoModelName" rules={[{ required: true, message: '请输入生视频模型名称' }]}>
+            <Input placeholder="例如：agnes-video-v2.0" />
+          </Form.Item>
+          <Form.Item label="生视频接口地址" name="videoModelBaseUrl" rules={[{ required: true, message: '请输入生视频接口地址' }]}>
+            <Input placeholder="https://apihub.agnes-ai.com/v1" />
+          </Form.Item>
+          <Form.Item label="生视频 API Key" name="videoModelApiKey">
+            <Input.Password placeholder="请输入生视频 API Key" />
+          </Form.Item>
+        </div>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            style={{
+              backgroundColor: '#d97757',
+              borderColor: '#d97757',
+              color: '#ffffff',
+              fontWeight: 500,
+              borderRadius: '6px'
+            }}
+          >
+            保存生视频配置
+          </Button>
+          <Button onClick={handleReset} style={{ borderColor: '#eae6df', color: '#5c5751', borderRadius: '6px' }}>
+            恢复默认
+          </Button>
+        </div>
+      </Form>
+    </Card>
+  );
+};
+
 const Settings: React.FC = () => {
   const store = useSettingsStore();
   const [globalForm] = Form.useForm();
@@ -505,6 +685,7 @@ const Settings: React.FC = () => {
           onClick={(e) => e.preventDefault()}
           items={[
             { key: 'model-config', href: '#model-config', title: '模型设置' },
+            { key: 'image-model-config', href: '#image-model-config', title: '生图模型' },
             { key: 'lan-config', href: '#lan-config', title: '局域网访问' },
           ]}
         />
@@ -706,6 +887,11 @@ const Settings: React.FC = () => {
                 </div>
               </Form>
             </Card>
+          </section>
+
+          <section id="image-model-config" style={{ marginBottom: 48 }}>
+            <ImageModelConfigCard />
+            <VideoModelConfigCard />
           </section>
 
           {/* 局域网访问 */}

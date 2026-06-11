@@ -65,6 +65,7 @@ describe('mobile archive flow', () => {
       expandedBlocks: {},
       selectedWorldBookId: null,
       selectedCharacterCardId: characterCard.id,
+      selectedUserCharacterCardId: secondCharacterCard.id,
       sessions: [],
       sessionId: 'partner-session-unsaved',
       sessionTitle: '新聊天',
@@ -86,6 +87,7 @@ describe('mobile archive flow', () => {
             todos: [],
             isArchived: false,
             characterCardId: characterCard.id,
+            selectedUserCharacterCardId: secondCharacterCard.id,
           }),
         })
       );
@@ -109,6 +111,7 @@ describe('mobile archive flow', () => {
       expandedBlocks: {},
       selectedWorldBookId: null,
       selectedCharacterCardIds: [characterCard.id, secondCharacterCard.id],
+      selectedUserCharacterCardId: secondCharacterCard.id,
       sessions: [],
       sessionId: 'story-session-unsaved',
       sessionTitle: '新故事',
@@ -123,8 +126,8 @@ describe('mobile archive flow', () => {
     fireEvent.click(screen.getByText('提炼记忆并锁定存档'));
 
     expect(await screen.findByText('请选择本次要同步记忆的角色卡：')).toBeInTheDocument();
-    expect(screen.getByText('禾禾')).toBeInTheDocument();
-    expect(screen.getByText('林逸')).toBeInTheDocument();
+    expect(screen.getAllByText('禾禾').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('林逸').length).toBeGreaterThan(0);
     expect(appInvokeMock).not.toHaveBeenCalledWith('analyze_character_memory', expect.anything());
 
     fireEvent.click(screen.getByText('开始分析封存'));
@@ -139,6 +142,7 @@ describe('mobile archive flow', () => {
             todos: [],
             isArchived: false,
             characterCardIds: [characterCard.id, secondCharacterCard.id],
+            selectedUserCharacterCardId: secondCharacterCard.id,
           }),
         })
       );

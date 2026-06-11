@@ -84,6 +84,20 @@ describe('Story prompt compilation', () => {
     expect(prompt).toContain('阿明');
     expect(prompt).toContain('穿越者、法师');
   });
+
+  it('prefers user character card content over manual user info when provided', () => {
+    const prompt = compileStorySystemPrompt({
+      basePrompt: '故事主持人',
+      worldBookContent: '# 世界书\n魔法大陆',
+      characterCards: [{ name: '林逸', content: '林逸角色卡正文' }],
+      userInfo: { name: '阿明', skills: '风系魔法' },
+      userCharacterCardContent: '# 角色卡：顾迟\n顾迟角色卡正文',
+      dynamicRoleLoadingEnabled: false,
+    });
+
+    expect(prompt).toContain('顾迟角色卡正文');
+    expect(prompt).not.toContain('风系魔法');
+  });
 });
 
 describe('Story model history messages', () => {

@@ -7,7 +7,16 @@ import { EditorState, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, keymap, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { invoke } from '@tauri-apps/api/core';
 import { BoldOutlined, ItalicOutlined, LinkOutlined, OrderedListOutlined, PictureOutlined, UnorderedListOutlined } from '@ant-design/icons';
-import { Button, Input, Space, Spin, Tooltip, Typography } from 'antd';
+import { Button, Input, Modal, Space, Spin, Tooltip, Typography, message } from 'antd';
+import { usePartnerStore } from '../stores/usePartnerStore';
+import { useSettingsStore } from '../stores/useSettingsStore';
+import { DEFAULT_IMAGE_MODEL, generateOpenAIImage } from '../utils/openaiImageGeneration';
+import { buildStoryIllustrationPrompt, detectStoryCharactersFromText, type MatchedStoryCharacter } from '../utils/storyIllustrationPrompt';
+import {
+  appendStoryIllustrationGalleryMeta,
+  parseStoryIllustrationGallery,
+  type StoryIllustrationGalleryItem,
+} from '../utils/storyIllustrationGallery';
 
 interface MarkdownEditorProps {
   filePath: string | null;
@@ -15,6 +24,12 @@ interface MarkdownEditorProps {
 }
 
 type SaveStatus = 'saved' | 'saving' | 'error';
+
+const STORY_IMAGE_SIZE_OPTIONS = [
+  { label: '1:1 方图', value: '1024x1024' as const },
+  { label: '16:9 横图', value: '1536x1024' as const },
+  { label: '9:16 竖图', value: '1024x1536' as const },
+];
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
 
@@ -24,7 +39,7 @@ const isImageFile = (path: string) => {
 };
 
 const getDirectoryName = (path: string) => path.replace(/[\\/][^\\/]*$/, '');
-
+const getFileBaseName = (path: string) => (path.split(/[\\/]/).pop() || '').replace(/\.[^.]+$/, '');
 const isExternalImageSrc = (src: string) => /^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith('data:') || src.startsWith('#');
 
 const normalizePath = (path: string) => {
@@ -237,20 +252,36 @@ const editorTheme = EditorView.theme({
 });
 
 const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = false }) => {
+  const { characterCards } = usePartnerStore();
+  const settings = useSettingsStore();
   const [content, setContent] = useState('');
   const [savedContent, setSavedContent] = useState('');
   const [imagePreviewSrc, setImagePreviewSrc] = useState('');
   const [loading, setLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
   const [readError, setReadError] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
+  const [contextMenuState, setContextMenuState] = useState<{ x: number; y: number } | null>(null);
+  const [isIllustrationModalOpen, setIsIllustrationModalOpen] = useState(false);
+  const [storyIllustrationPrompt, setStoryIllustrationPrompt] = useState('');
+  const [storyIllustrationPreview, setStoryIllustrationPreview] = useState('');
+  const [storyIllustrationSize, setStoryIllustrationSize] = useState<'1024x1024' | '1536x1024' | '1024x1536'>('1536x1024');
+  const [isStoryIllustrationGenerating, setIsStoryIllustrationGenerating] = useState(false);
+  const [matchedStoryCharacters, setMatchedStoryCharacters] = useState<MatchedStoryCharacter[]>([]);
+  const [storyIllustrationGallery, setStoryIllustrationGallery] = useState<StoryIllustrationGalleryItem[]>([]);
+  const [activeStoryIllustrationId, setActiveStoryIllustrationId] = useState<string | null>(null);
+  const [storyIllustrationLightboxImage, setStoryIllustrationLightboxImage] = useState('');
+  const [storyIllustrationLightboxTitle, setStoryIllustrationLightboxTitle] = useState('');
   const editorViewRef = useRef<EditorView | null>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
+  const testTextareaRef = useRef<any>(null);
   const latestContentRef = useRef(content);
   const savedContentRef = useRef(savedContent);
   const loadingRef = useRef(loading);
   const readErrorRef = useRef(readError);
   const lastKnownModifiedAtRef = useRef<number | null>(null);
   const fullSelectionIntentUntilRef = useRef(0);
+  const isTestMode = import.meta.env.MODE === 'test';
 
   const extensions = useMemo<Extension[]>(() => [
     history(),
@@ -268,6 +299,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
 
   useEffect(() => {
     latestContentRef.current = content;
+    setStoryIllustrationGallery(parseStoryIllustrationGallery(content));
   }, [content]);
 
   useEffect(() => {
@@ -424,7 +456,19 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
     };
   }, [content, filePath, loading, readError, readOnly, savedContent]);
 
+  const getTestTextareaElement = useCallback((): HTMLTextAreaElement | null => {
+    const ref = testTextareaRef.current;
+    if (!ref) return null;
+    if (ref instanceof HTMLTextAreaElement) return ref;
+    return ref.resizableTextArea?.textArea ?? null;
+  }, []);
+
   const getSelectedSource = useCallback(() => {
+    const testTextarea = getTestTextareaElement();
+    if (isTestMode && testTextarea) {
+      const textarea = testTextarea;
+      return textarea.value.slice(textarea.selectionStart ?? 0, textarea.selectionEnd ?? 0);
+    }
     const view = editorViewRef.current;
     if (!view) {
       return '';
@@ -436,7 +480,11 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
       }
     }
     return ranges.join('\n');
-  }, []);
+  }, [getTestTextareaElement, isTestMode]);
+
+  const syncSelectedText = useCallback(() => {
+    setSelectedText(getSelectedSource().trim());
+  }, [getSelectedSource]);
 
   const handleCopy = useCallback((event: ClipboardEvent | React.ClipboardEvent<HTMLDivElement>) => {
     const editorShell = editorShellRef.current;
@@ -480,6 +528,18 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
       document.removeEventListener('copy', handleCopy, true);
     };
   }, [handleCopy]);
+
+  useEffect(() => {
+    const handleWindowPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && editorShellRef.current?.contains(target)) {
+        return;
+      }
+      setContextMenuState(null);
+    };
+    window.addEventListener('pointerdown', handleWindowPointerDown);
+    return () => window.removeEventListener('pointerdown', handleWindowPointerDown);
+  }, []);
 
   const insertMarkdown = useCallback((before: string, after = '', placeholder = '') => {
     const view = editorViewRef.current;
@@ -528,13 +588,145 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
     insertMarkdown('![图片说明](', ')', src);
   }, [insertMarkdown]);
 
+  const insertStoryIllustration = useCallback((markdown: string) => {
+    const view = editorViewRef.current;
+    if (!view || readOnly) {
+      return;
+    }
+    const range = view.state.selection.main;
+    const suffix = markdown.startsWith('\n') ? markdown : `\n\n${markdown}`;
+    view.dispatch({
+      changes: { from: range.to, to: range.to, insert: suffix },
+      selection: { anchor: range.to + suffix.length, head: range.to + suffix.length },
+    });
+    view.focus();
+  }, [readOnly]);
+
+  const buildStoryIllustrationFilePath = useCallback(() => {
+    const safeBaseName = getFileBaseName(filePath || 'story');
+    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+    return `${getDirectoryName(filePath || '')}/illustrations/${safeBaseName}-illustration-${stamp}.png`;
+  }, [filePath]);
+
+  const toRelativeMarkdownPath = useCallback((absolutePath: string) => {
+    const baseDir = getDirectoryName(filePath || '').replace(/\\/g, '/');
+    const target = absolutePath.replace(/\\/g, '/');
+    const baseParts = baseDir.split('/').filter(Boolean);
+    const targetParts = target.split('/').filter(Boolean);
+
+    while (baseParts.length > 0 && targetParts.length > 0 && baseParts[0] === targetParts[0]) {
+      baseParts.shift();
+      targetParts.shift();
+    }
+
+    const relativeParts = [...Array(baseParts.length).fill('..'), ...targetParts];
+    return relativeParts.join('/');
+  }, [filePath]);
+
+  const handleOpenStoryIllustrationModal = useCallback(() => {
+    const selection = getSelectedSource().trim();
+    if (!selection) {
+      message.warning('请先选中一段剧情文字。');
+      return;
+    }
+    setSelectedText(selection);
+    const matched = detectStoryCharactersFromText(selection, characterCards);
+    setMatchedStoryCharacters(matched);
+    setStoryIllustrationPrompt(buildStoryIllustrationPrompt({ selectedText: selection, matchedCharacters: matched }));
+    setStoryIllustrationPreview('');
+    setActiveStoryIllustrationId(null);
+    setIsIllustrationModalOpen(true);
+    setContextMenuState(null);
+  }, [characterCards, getSelectedSource]);
+
+  const upsertStoryIllustrationGallery = useCallback((item: StoryIllustrationGalleryItem) => {
+    setContent((prev) => {
+      const currentGallery = parseStoryIllustrationGallery(prev);
+      const nextGallery = [item, ...currentGallery.filter((entry) => entry.id !== item.id)];
+      return appendStoryIllustrationGalleryMeta(prev, nextGallery);
+    });
+  }, []);
+
+  const handleRegenerateStoryIllustration = useCallback((item: StoryIllustrationGalleryItem) => {
+    setSelectedText(item.anchorText);
+    const matched = characterCards
+      .filter((card) => item.characterIds.includes(card.id))
+      .map((card) => ({
+        id: card.id,
+        name: card.fields?.name?.trim() || card.name,
+        aliases: [card.fields?.name?.trim() || card.name],
+        visualImage: card.fields?.visualImage,
+      }));
+    setMatchedStoryCharacters(matched);
+    setStoryIllustrationPrompt(item.prompt);
+    setStoryIllustrationPreview(item.imageSource);
+    setActiveStoryIllustrationId(item.id);
+    setIsIllustrationModalOpen(true);
+  }, [characterCards]);
+
+  const handleGenerateStoryIllustration = useCallback(async () => {
+    const prompt = storyIllustrationPrompt.trim();
+    if (!prompt) {
+      message.warning('请先确认剧情插图提示词。');
+      return;
+    }
+    if (!settings.imageModelApiKey) {
+      message.warning('图片生成 API Key 尚未配置，请先在设置页配置。');
+      return;
+    }
+    if (!filePath) {
+      message.warning('当前文件路径不可用，无法保存剧情插图。');
+      return;
+    }
+
+    setIsStoryIllustrationGenerating(true);
+    try {
+      const referenceImages = matchedStoryCharacters
+        .map((character) => character.visualImage)
+        .filter((image): image is string => typeof image === 'string' && image.trim().length > 0);
+
+      const result = await generateOpenAIImage({
+        apiKey: settings.imageModelApiKey,
+        baseUrl: settings.imageModelBaseUrl,
+        model: settings.imageModelName || DEFAULT_IMAGE_MODEL,
+        prompt,
+        size: storyIllustrationSize,
+        image: referenceImages.length > 0 ? referenceImages : undefined,
+      });
+
+      const outputPath = buildStoryIllustrationFilePath();
+      await invoke('write_image_asset', {
+        path: outputPath,
+        source: result.imageDataUrl,
+      });
+      const relativePath = toRelativeMarkdownPath(outputPath);
+      const illustrationId = activeStoryIllustrationId || `story-illustration-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      if (!activeStoryIllustrationId) {
+        insertStoryIllustration(`![剧情插图](${relativePath})`);
+      }
+      upsertStoryIllustrationGallery({
+        id: illustrationId,
+        anchorText: selectedText,
+        prompt,
+        imagePath: relativePath,
+        imageSource: result.imageDataUrl,
+        characterIds: matchedStoryCharacters.map((character) => character.id),
+        createdAt: Date.now(),
+      });
+      setStoryIllustrationPreview(result.imageDataUrl);
+      message.success('剧情插图已生成并插入文稿。');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '剧情插图生成失败。');
+    } finally {
+      setIsStoryIllustrationGenerating(false);
+    }
+  }, [activeStoryIllustrationId, buildStoryIllustrationFilePath, filePath, insertStoryIllustration, matchedStoryCharacters, selectedText, settings.imageModelApiKey, settings.imageModelBaseUrl, settings.imageModelName, storyIllustrationPrompt, storyIllustrationSize, toRelativeMarkdownPath, upsertStoryIllustrationGallery]);
+
   const handleChange = useCallback((value: string, _viewUpdate: ViewUpdate) => {
     if (!readOnly) {
       setContent(value);
     }
   }, [readOnly]);
-
-  const isTestMode = import.meta.env.MODE === 'test';
 
   const toolbar = (
     <div className="markdown-editor-toolbar" aria-label="Markdown编辑工具栏">
@@ -597,6 +789,14 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
           ref={editorShellRef}
           onCopyCapture={handleCopy}
           onKeyDownCapture={handleEditorKeyDown}
+          onContextMenu={(event) => {
+            if (readOnly || !selectedText.trim()) {
+              setContextMenuState(null);
+              return;
+            }
+            event.preventDefault();
+            setContextMenuState({ x: event.clientX, y: event.clientY });
+          }}
         >
           <div className="markdown-save-status">
             {saveStatus === 'saving' ? '保存中' : saveStatus === 'error' ? '保存失败' : '已保存'}
@@ -609,7 +809,9 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
                   value={content}
                   aria-label="Markdown源码编辑区"
                   className="markdown-editor-test-fallback"
+                  ref={testTextareaRef}
                   readOnly={readOnly}
+                  onSelect={syncSelectedText}
                   onChange={(event) => {
                     if (!readOnly) {
                       setContent(event.target.value);
@@ -629,15 +831,198 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ filePath, readOnly = fa
                 onChange={handleChange}
                 onCreateEditor={(view) => {
                   editorViewRef.current = view;
+                  syncSelectedText();
                 }}
                 onUpdate={(viewUpdate) => {
                   if (viewUpdate.view) {
                     editorViewRef.current = viewUpdate.view;
                   }
+                  if (viewUpdate.selectionSet) {
+                    syncSelectedText();
+                  }
                 }}
               />
             </div>
           </div>
+          {contextMenuState && (
+            <div
+              style={{
+                position: 'fixed',
+                top: contextMenuState.y,
+                left: contextMenuState.x,
+                zIndex: 1200,
+                background: '#fff',
+                border: '1px solid #eae6df',
+                borderRadius: 8,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                padding: 6,
+              }}
+            >
+              <Button type="text" onMouseDown={(event) => event.preventDefault()} onClick={handleOpenStoryIllustrationModal}>
+                生成剧情插图
+              </Button>
+            </div>
+          )}
+          <Modal
+            title="生成剧情插图"
+            open={isIllustrationModalOpen}
+            onCancel={() => {
+              if (!isStoryIllustrationGenerating) {
+                setIsIllustrationModalOpen(false);
+              }
+            }}
+            footer={[
+              <Button key="cancel" onClick={() => setIsIllustrationModalOpen(false)} disabled={isStoryIllustrationGenerating}>
+                取消
+              </Button>,
+              <Button
+                key="generate"
+                type="primary"
+                onClick={() => void handleGenerateStoryIllustration()}
+                disabled={!storyIllustrationPrompt.trim()}
+                loading={isStoryIllustrationGenerating}
+              >
+                生成图片
+              </Button>,
+            ]}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <Typography.Text type="secondary">已选剧情文字</Typography.Text>
+                <div style={{ marginTop: 6, padding: 12, borderRadius: 8, background: '#faf9f5', whiteSpace: 'pre-wrap', maxHeight: 140, overflowY: 'auto' }}>
+                  {selectedText || '未选中文本'}
+                </div>
+              </div>
+              <div>
+                <Typography.Text type="secondary">识别到的角色参考</Typography.Text>
+                <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {matchedStoryCharacters.length > 0 ? matchedStoryCharacters.map((character) => (
+                    <span key={character.id} style={{ padding: '4px 10px', borderRadius: 999, background: '#fff7f2', color: '#d97757', border: '1px solid #f2d6c8', fontSize: 12 }}>
+                      {character.name}{character.visualImage ? ' · 已挂主图' : ' · 无主图'}
+                    </span>
+                  )) : (
+                    <span style={{ fontSize: 12, color: '#8c8882' }}>未识别到角色卡，将仅根据文本生成场景插图。</span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <Typography.Text type="secondary">剧情插图提示词预览</Typography.Text>
+                <div style={{ margin: '8px 0' }}>
+                  <select
+                    aria-label="剧情插图尺寸"
+                    value={storyIllustrationSize}
+                    onChange={(event) => setStoryIllustrationSize(event.target.value as '1024x1024' | '1536x1024' | '1024x1536')}
+                    style={{ width: '100%', height: 32, borderRadius: 6, border: '1px solid #d9d9d9', padding: '0 8px' }}
+                  >
+                    {STORY_IMAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <Input.TextArea
+                  aria-label="剧情插图提示词"
+                  rows={8}
+                  value={storyIllustrationPrompt}
+                  onChange={(event) => setStoryIllustrationPrompt(event.target.value)}
+                  placeholder="请先确认或编辑剧情插图提示词，再点击生成图片。"
+                />
+              </div>
+              {storyIllustrationPreview && (
+                <div>
+                  <Typography.Text type="secondary">最新生成预览</Typography.Text>
+                  <div style={{ marginTop: 6, padding: 12, borderRadius: 8, background: '#faf9f5' }}>
+                    <button
+                      type="button"
+                      style={{ border: 'none', padding: 0, background: 'transparent', width: '100%', cursor: 'zoom-in' }}
+                      onClick={() => {
+                        setStoryIllustrationLightboxImage(storyIllustrationPreview);
+                        setStoryIllustrationLightboxTitle('剧情插图预览');
+                      }}
+                    >
+                      <img src={storyIllustrationPreview} alt="剧情插图预览" style={{ width: '100%', borderRadius: 8, objectFit: 'cover' }} />
+                    </button>
+                  </div>
+                </div>
+              )}
+              {storyIllustrationGallery.length > 0 && (
+                <div>
+                  <Typography.Text type="secondary">剧情插图资料库</Typography.Text>
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 240, overflowY: 'auto' }}>
+                    {storyIllustrationGallery.map((item, index) => (
+                      <div
+                        key={item.id}
+                        style={{
+                          border: '1px solid #eae6df',
+                          borderRadius: 10,
+                          padding: 10,
+                          background: activeStoryIllustrationId === item.id ? '#fff7f2' : '#fff',
+                        }}
+                      >
+                        <div style={{ display: 'flex', gap: 12 }}>
+                          <button
+                            type="button"
+                            style={{ border: 'none', padding: 0, background: 'transparent', cursor: 'zoom-in', flexShrink: 0 }}
+                            onClick={() => {
+                              setStoryIllustrationLightboxImage(item.imageSource);
+                              setStoryIllustrationLightboxTitle(`剧情插图资料库第${index + 1}张`);
+                            }}
+                          >
+                            <img
+                              src={item.imageSource}
+                              alt={`剧情插图资料库第${index + 1}张`}
+                              style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }}
+                            />
+                          </button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 12, color: '#8c8882' }}>
+                              {new Date(item.createdAt).toLocaleString('zh-CN')}
+                            </div>
+                            <div style={{ fontSize: 13, color: '#33312e', whiteSpace: 'pre-wrap' }}>
+                              {item.anchorText}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  setStoryIllustrationPreview(item.imageSource);
+                                  setSelectedText(item.anchorText);
+                                  setStoryIllustrationPrompt(item.prompt);
+                                  setActiveStoryIllustrationId(item.id);
+                                }}
+                              >
+                                查看并编辑
+                              </Button>
+                              <Button size="small" type="primary" onClick={() => handleRegenerateStoryIllustration(item)}>
+                                重新生成同段插图
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Modal>
+          <Modal
+            title={storyIllustrationLightboxTitle || '查看图片'}
+            open={!!storyIllustrationLightboxImage}
+            footer={null}
+            onCancel={() => {
+              setStoryIllustrationLightboxImage('');
+              setStoryIllustrationLightboxTitle('');
+            }}
+            width={920}
+          >
+            {storyIllustrationLightboxImage && (
+              <img
+                src={storyIllustrationLightboxImage}
+                alt="剧情插图放大预览"
+                style={{ width: '100%', maxHeight: '75vh', objectFit: 'contain', borderRadius: 8, background: '#faf9f5' }}
+              />
+            )}
+          </Modal>
         </div>
       )}
     </div>

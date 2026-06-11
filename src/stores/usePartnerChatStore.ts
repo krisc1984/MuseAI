@@ -18,6 +18,7 @@ interface PartnerChatState {
   expandedBlocks: Record<string, boolean>;
   selectedWorldBookId: string | null;
   selectedCharacterCardId: string | null;
+  selectedUserCharacterCardId: string | null;
   userInfo: Partial<PartnerItemFields>;
   sessions: AgentSessionSummary[];
   sessionId: string;
@@ -32,6 +33,7 @@ interface PartnerChatState {
   setExpandedBlocks: (blocks: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => void;
   setSelectedWorldBookId: (id: string | null) => void;
   setSelectedCharacterCardId: (id: string | null) => void;
+  setSelectedUserCharacterCardId: (id: string | null) => void;
   setUserInfo: (info: Partial<PartnerItemFields> | ((prev: Partial<PartnerItemFields>) => Partial<PartnerItemFields>)) => void;
   setSessions: (sessions: AgentSessionSummary[]) => void;
   setSessionId: (id: string) => void;
@@ -51,6 +53,7 @@ export const usePartnerChatStore = create<PartnerChatState>()(
       expandedBlocks: {},
       selectedWorldBookId: null,
       selectedCharacterCardId: null,
+      selectedUserCharacterCardId: null,
       userInfo: {},
       sessions: [],
       sessionId: createSessionId(),
@@ -69,6 +72,7 @@ export const usePartnerChatStore = create<PartnerChatState>()(
       })),
       setSelectedWorldBookId: (selectedWorldBookId) => set({ selectedWorldBookId }),
       setSelectedCharacterCardId: (selectedCharacterCardId) => set({ selectedCharacterCardId }),
+      setSelectedUserCharacterCardId: (selectedUserCharacterCardId) => set({ selectedUserCharacterCardId }),
       setUserInfo: (updater) => set((state) => ({
         userInfo: typeof updater === 'function' ? updater(state.userInfo) : updater,
       })),
@@ -99,6 +103,7 @@ export const usePartnerChatStore = create<PartnerChatState>()(
       partialize: (state) => ({
         selectedWorldBookId: state.selectedWorldBookId,
         selectedCharacterCardId: state.selectedCharacterCardId,
+        selectedUserCharacterCardId: state.selectedUserCharacterCardId,
         userInfo: state.userInfo,
       }),
     }

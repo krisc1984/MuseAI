@@ -49,6 +49,7 @@ export interface AgentSessionSummary {
   savedAt: number;
   characterCardId?: string | null;
   characterCardIds?: string[] | null;
+  selectedUserCharacterCardId?: string | null;
   selectedWorldBookId?: string | null;
   dynamicRoleLoadingEnabled?: boolean;
 }
@@ -62,6 +63,7 @@ export interface AgentSessionRecord extends AgentSessionSummary {
   isArchived?: boolean;
   characterCardId?: string | null;
   characterCardIds?: string[] | null;
+  selectedUserCharacterCardId?: string | null;
   selectedWorldBookId?: string | null;
   dynamicRoleLoadingEnabled?: boolean;
 }

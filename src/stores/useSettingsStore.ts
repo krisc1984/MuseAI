@@ -28,6 +28,14 @@ export interface SettingsState {
   llmBaseUrl: string;
   llmApiKey: string;
   llmModel: string;
+  imageModelProvider: string;
+  imageModelBaseUrl: string;
+  imageModelApiKey: string;
+  imageModelName: string;
+  videoModelProvider: string;
+  videoModelBaseUrl: string;
+  videoModelApiKey: string;
+  videoModelName: string;
 
   models: LlmModelConfig[];
   selectedModelId: string | null;
@@ -55,6 +63,8 @@ export interface SettingsState {
   articleType: string[];
 
   setLlmConfig: (config: Partial<SettingsState>) => void;
+  setImageModelConfig: (config: Pick<Partial<SettingsState>, 'imageModelProvider' | 'imageModelBaseUrl' | 'imageModelApiKey' | 'imageModelName'>) => void;
+  setVideoModelConfig: (config: Pick<Partial<SettingsState>, 'videoModelProvider' | 'videoModelBaseUrl' | 'videoModelApiKey' | 'videoModelName'>) => void;
   setAgentConfig: (agentId: string, config: Partial<AgentConfig>) => void;
   setSystemPrompt: (prompt: string) => void;
   resetSystemPrompt: () => void;
@@ -624,6 +634,14 @@ export const useSettingsStore = create<SettingsState>()(
       llmBaseUrl: 'https://api.openai.com/v1',
       llmApiKey: '',
       llmModel: 'gpt-4o',
+      imageModelProvider: 'Agnes',
+      imageModelBaseUrl: 'https://apihub.agnes-ai.com/v1',
+      imageModelApiKey: '',
+      imageModelName: 'agnes-image-2.1-flash',
+      videoModelProvider: 'Agnes',
+      videoModelBaseUrl: 'https://apihub.agnes-ai.com/v1',
+      videoModelApiKey: '',
+      videoModelName: 'agnes-video-v2.0',
 
       models: [
         {
@@ -662,6 +680,8 @@ export const useSettingsStore = create<SettingsState>()(
       articleType: ['男频', '长篇', '玄幻脑洞'],
 
       setLlmConfig: (config) => set((state) => ({ ...state, ...config })),
+      setImageModelConfig: (config) => set((state) => ({ ...state, ...config })),
+      setVideoModelConfig: (config) => set((state) => ({ ...state, ...config })),
 
       setAgentConfig: (agentId, config) => set((state) => ({
         agentConfigs: {
@@ -823,7 +843,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'museai-settings-storage',
       storage: createJSONStorage(() => createDiskStorage('settings-store', 'museai-settings-storage')),
-      version: 15,
+      version: 16,
       partialize: (state) => {
         const { worksDirectory: _, ...rest } = state;
         return rest as SettingsState;
@@ -938,6 +958,14 @@ export const useSettingsStore = create<SettingsState>()(
           storyArchivePrompt: !state.storyArchivePrompt
             ? defaultStoryArchivePrompt
             : state.storyArchivePrompt,
+          imageModelProvider: state.imageModelProvider || 'Agnes',
+          imageModelBaseUrl: state.imageModelBaseUrl || 'https://apihub.agnes-ai.com/v1',
+          imageModelApiKey: state.imageModelApiKey || '',
+          imageModelName: state.imageModelName || 'agnes-image-2.1-flash',
+          videoModelProvider: state.videoModelProvider || 'Agnes',
+          videoModelBaseUrl: state.videoModelBaseUrl || 'https://apihub.agnes-ai.com/v1',
+          videoModelApiKey: state.videoModelApiKey || '',
+          videoModelName: state.videoModelName || 'agnes-video-v2.0',
         };
 
         let finalState = base;

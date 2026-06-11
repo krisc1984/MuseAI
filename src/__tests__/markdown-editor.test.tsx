@@ -2,6 +2,13 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { invoke } from '@tauri-apps/api/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MarkdownEditor from '../components/MarkdownEditor';
+import { usePartnerStore } from '../stores/usePartnerStore';
+import { useSettingsStore } from '../stores/useSettingsStore';
+
+vi.mock('../utils/openaiImageGeneration', () => ({
+  DEFAULT_IMAGE_MODEL: 'gpt-image-2',
+  generateOpenAIImage: vi.fn(async () => ({ imageDataUrl: 'data:image/png;base64,GENERATED' })),
+}));
 
 const invokeMock = vi.mocked(invoke);
 
@@ -12,8 +19,28 @@ describe('MarkdownEditor', () => {
       if (command === 'read_file') return '# 标题\n\n正文';
       if (command === 'file_modified_at') return 1;
       if (command === 'write_file') return 2;
+      if (command === 'write_image_asset') return 3;
       if (command === 'read_image_data_url') return 'data:image/png;base64,LOCAL';
       return undefined;
+    });
+    useSettingsStore.setState({
+      imageModelApiKey: 'image-key',
+      imageModelBaseUrl: 'https://api.example.com/v1',
+      imageModelName: 'gpt-image-2',
+    });
+    usePartnerStore.setState({
+      worldBooks: [],
+      characterCards: [
+        {
+          id: 'char-1',
+          name: '沈照夜',
+          type: 'character_card',
+          content: '',
+          fields: { name: '沈照夜', visualImage: 'data:image/png;base64,REFERENCE' },
+        },
+      ],
+      selectedId: null,
+      selectedType: null,
     });
   });
 
@@ -141,5 +168,133 @@ describe('MarkdownEditor', () => {
 
     const image = await screen.findByAltText('cover.jpg');
     expect(image).toHaveAttribute('src', 'data:image/png;base64,LOCAL');
+  });
+
+  it('shows a right-click action for selected story text and inserts generated illustration markdown', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'read_file') return '沈照夜站在雨夜长街尽头。';
+      if (command === 'file_modified_at') return 1;
+      if (command === 'write_file') return 2;
+      if (command === 'write_image_asset') return 3;
+      return undefined;
+    });
+
+    render(<MarkdownEditor filePath="/Users/test/Documents/MuseAI/articles/chapter.md" />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Markdown源码编辑区' });
+    fireEvent.select(editor, { target: { selectionStart: 0, selectionEnd: 12 } });
+    fireEvent.contextMenu(editor);
+
+    fireEvent.click(await screen.findByRole('button', { name: '生成剧情插图' }));
+
+    expect(await screen.findByText('生成剧情插图')).toBeInTheDocument();
+    expect(screen.getByText('沈照夜 · 已挂主图')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '生成图片' }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'write_image_asset',
+        expect.objectContaining({
+          path: expect.stringContaining('/illustrations/chapter-illustration-'),
+          source: 'data:image/png;base64,GENERATED',
+        }),
+      );
+    });
+  });
+
+  it('shows story illustration gallery metadata and can regenerate the same text block', async () => {
+    const markdown = [
+      '原文段落。',
+      '',
+      '![剧情插图](illustrations/chapter-illustration-old.png)',
+      '',
+      '<!-- MUSEAI_STORY_ILLUSTRATIONS',
+      JSON.stringify([
+        {
+          id: 'story-1',
+          anchorText: '原文段落。',
+          prompt: '旧提示词',
+          imagePath: 'illustrations/chapter-illustration-old.png',
+          imageSource: 'data:image/png;base64,OLD',
+          characterIds: ['char-1'],
+          createdAt: 1710000000000,
+        },
+      ], null, 2),
+      'MUSEAI_STORY_ILLUSTRATIONS -->',
+    ].join('\n');
+
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'read_file') return markdown;
+      if (command === 'file_modified_at') return 1;
+      if (command === 'write_file') return 2;
+      if (command === 'write_image_asset') return 3;
+      return undefined;
+    });
+
+    render(<MarkdownEditor filePath="/Users/test/Documents/MuseAI/articles/chapter.md" />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Markdown源码编辑区' });
+    fireEvent.select(editor, { target: { selectionStart: 0, selectionEnd: 5 } });
+    fireEvent.contextMenu(editor);
+    fireEvent.click(await screen.findByRole('button', { name: '生成剧情插图' }));
+
+    expect(await screen.findByText('剧情插图资料库')).toBeInTheDocument();
+    expect(screen.getByAltText('剧情插图资料库第1张')).toHaveAttribute('src', 'data:image/png;base64,OLD');
+
+    fireEvent.click(screen.getByRole('button', { name: '重新生成同段插图' }));
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('剧情插图提示词') as HTMLTextAreaElement).value).toBe('旧提示词');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '生成图片' }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'write_image_asset',
+        expect.objectContaining({
+          source: 'data:image/png;base64,GENERATED',
+        }),
+      );
+    });
+  });
+
+  it('点击剧情插图资料库图片可放大查看', async () => {
+    const markdown = [
+      '原文段落。',
+      '',
+      '![剧情插图](illustrations/chapter-illustration-old.png)',
+      '',
+      '<!-- MUSEAI_STORY_ILLUSTRATIONS',
+      JSON.stringify([
+        {
+          id: 'story-1',
+          anchorText: '原文段落。',
+          prompt: '旧提示词',
+          imagePath: 'illustrations/chapter-illustration-old.png',
+          imageSource: 'data:image/png;base64,OLD',
+          characterIds: ['char-1'],
+          createdAt: 1710000000000,
+        },
+      ], null, 2),
+      'MUSEAI_STORY_ILLUSTRATIONS -->',
+    ].join('\n');
+
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'read_file') return markdown;
+      if (command === 'file_modified_at') return 1;
+      return undefined;
+    });
+
+    render(<MarkdownEditor filePath="/Users/test/Documents/MuseAI/articles/chapter.md" />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Markdown源码编辑区' });
+    fireEvent.select(editor, { target: { selectionStart: 0, selectionEnd: 5 } });
+    fireEvent.contextMenu(editor);
+    fireEvent.click(await screen.findByRole('button', { name: '生成剧情插图' }));
+    fireEvent.click(await screen.findByAltText('剧情插图资料库第1张'));
+
+    expect(screen.getByAltText('剧情插图放大预览')).toHaveAttribute('src', 'data:image/png;base64,OLD');
   });
 });

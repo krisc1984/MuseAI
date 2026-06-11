@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Button, Input, Tooltip, Empty, Card, Tabs, Tag, Row, Col, Space, Radio, Modal, Spin, message, Tree, Progress } from 'antd';
+import { Button, Input, Tooltip, Empty, Card, Tabs, Tag, Row, Col, Space, Radio, Modal, Spin, message, Tree, Progress, Select } from 'antd';
 import { 
   GlobalOutlined, 
   UserOutlined, 
@@ -17,13 +17,16 @@ import {
   LoadingOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  ClockCircleOutlined
+  ClockCircleOutlined,
+  PictureOutlined
 } from '@ant-design/icons';
 import { usePartnerStore, PartnerItem, PartnerItemFields, CustomField, normalizePartnerFields } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { buildCharacterVisualPrompt, type CharacterVisualImageType } from '../utils/characterVisualPrompt';
+import { DEFAULT_IMAGE_MODEL, generateOpenAIImage } from '../utils/openaiImageGeneration';
 import {
   BackgroundExtractionMode,
   CharacterExtractionItem,
@@ -33,6 +36,87 @@ import {
 
 const DIRECTORY_WIDTH = 280;
 const DEFAULT_BACKGROUND_CANCELLATION_SETTLE_MS = 15_000;
+const CHARACTER_VISUAL_STYLES = [
+  {
+    name: '3D建模游戏CG风',
+    description: '精致写实，光影细腻，质感逼真',
+    image: '/character-styles/3d-game-cg.png',
+  },
+  {
+    name: '欧式暗黑华丽风',
+    description: '神秘高贵，暗色调，华丽哥特',
+    image: '/character-styles/dark-gothic.png',
+  },
+  {
+    name: '中式古风金缕风',
+    description: '传统古风，金线勾勒，典雅华贵',
+    image: '/character-styles/chinese-golden-line.png',
+  },
+  {
+    name: '古风水墨动态风',
+    description: '水墨写意，意境悠远，动态飘逸',
+    image: '/character-styles/ink-dynamic.png',
+  },
+  {
+    name: '赛博朋克废土风',
+    description: '未来科技，霓虹光影，废土美学',
+    image: '/character-styles/cyberpunk-wasteland.png',
+  },
+  {
+    name: '西方古典油画风',
+    description: '油画质感，色彩厚重，古典姝雅',
+    image: '/character-styles/classic-oil-painting.png',
+  },
+  {
+    name: '紫调月夜风',
+    description: '紫色梦幻，月夜氛围，神秘唯美',
+    image: '/character-styles/purple-moon-night.png',
+  },
+  {
+    name: '冷白光·细腻厚涂风',
+    description: '冷色光影，细腻厚涂，层次丰富',
+    image: '/character-styles/cold-white-impasto.png',
+  },
+  {
+    name: '细腻厚涂·东方玄幻风',
+    description: '东方玄幻，细腻厚涂，气势绮丽',
+    image: '/character-styles/eastern-fantasy-impasto.png',
+  },
+  {
+    name: '绚丽厚涂·东方玄幻风',
+    description: '东方玄幻，细腻厚涂，色彩绚丽',
+    image: '/character-styles/vivid-eastern-fantasy.png',
+  },
+];
+
+const IMAGE_SIZE_OPTIONS = [
+  { label: '1:1 方图', value: '1024x1024' as const },
+  { label: '16:9 横图', value: '1536x1024' as const },
+  { label: '9:16 竖图', value: '1024x1536' as const },
+];
+
+const buildVisualGalleryItem = ({
+  image,
+  imageType,
+  style,
+  prompt,
+  source,
+}: {
+  image: string;
+  imageType?: CharacterVisualImageType;
+  style?: string;
+  prompt?: string;
+  source: 'generated' | 'uploaded';
+}) => ({
+  id: `visual-gallery-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  image,
+  type: imageType,
+  style: style || '',
+  prompt: prompt || '',
+  title: '',
+  note: '',
+  source,
+});
 
 const getBackgroundCancellationSettleMs = () => {
   const testValue = (globalThis as { __MUSEAI_BACKGROUND_CANCELLATION_SETTLE_MS__?: number })
@@ -95,6 +179,19 @@ const Background: React.FC = () => {
   const [isMemModalOpen, setIsMemModalOpen] = useState(false);
   const [optimizedEvents, setOptimizedEvents] = useState('');
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [isVisualModalOpen, setIsVisualModalOpen] = useState(false);
+  const [visualStyle, setVisualStyle] = useState(CHARACTER_VISUAL_STYLES[0].name);
+  const [customVisualStyle, setCustomVisualStyle] = useState('');
+  const [visualImageType, setVisualImageType] = useState<CharacterVisualImageType>('portrait');
+  const [visualImageSize, setVisualImageSize] = useState<'1024x1024' | '1536x1024' | '1024x1536'>('1024x1024');
+  const [isVisualGenerating, setIsVisualGenerating] = useState(false);
+  const [visualPreview, setVisualPreview] = useState('');
+  const [visualError, setVisualError] = useState('');
+  const [visualPrompt, setVisualPrompt] = useState('');
+  const [visualReferenceImage, setVisualReferenceImage] = useState('');
+  const [visualReferenceImageName, setVisualReferenceImageName] = useState('');
+  const [visualLightboxImage, setVisualLightboxImage] = useState('');
+  const [visualLightboxTitle, setVisualLightboxTitle] = useState('');
 
   const generateTaskId = useCallback(() => {
     return 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
@@ -577,6 +674,217 @@ const Background: React.FC = () => {
   const selectedItem = selectedType === 'world_book' 
     ? worldBooks.find(b => b.id === selectedId) 
     : characterCards.find(c => c.id === selectedId);
+
+  const buildCurrentCharacterVisualPrompt = () => {
+    if (!selectedItem || selectedItem.type !== 'character_card') {
+      message.warning('请先选择一个角色卡。');
+      return '';
+    }
+
+    const style = customVisualStyle.trim() || visualStyle;
+    return buildCharacterVisualPrompt({
+      characterName: selectedItem.name,
+      fields: selectedItem.fields || {},
+      imageType: visualImageType,
+      style,
+    });
+  };
+
+  const handleBuildCharacterVisualPrompt = () => {
+    const prompt = buildCurrentCharacterVisualPrompt();
+    if (!prompt) return;
+
+    const nextPrompt = visualReferenceImage
+      ? `${prompt}\n\n参考图要求：请严格参考上传示例图中的角色脸型、发型、发饰、服装结构与整体配色关系，保持人物识别特征一致，仅在构图、版式和镜头表达上按当前任务要求延展。`
+      : prompt;
+
+    setVisualPrompt(nextPrompt);
+    setVisualError('');
+  };
+
+  const handleReferenceImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      setVisualReferenceImage(result);
+      setVisualReferenceImageName(file.name);
+      setVisualError('');
+    };
+    reader.onerror = () => {
+      setVisualError('示例图读取失败，请重新选择图片。');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveVisualImageToGallery = ({
+    image,
+    prompt,
+    style,
+    imageType,
+    source,
+  }: {
+    image: string;
+    prompt?: string;
+    style?: string;
+    imageType?: CharacterVisualImageType;
+    source: 'generated' | 'uploaded';
+  }) => {
+    if (!selectedItem || selectedItem.type !== 'character_card' || !image) {
+      return;
+    }
+
+    const currentGallery = selectedItem.fields?.visualImageGallery || [];
+    const nextItem = buildVisualGalleryItem({ image, prompt, style, imageType, source });
+    updateItemFields(selectedItem.id, 'character_card', {
+      ...(selectedItem.fields || {}),
+      visualImage: image,
+      visualImagePrompt: prompt || selectedItem.fields?.visualImagePrompt || '',
+      visualImageType: imageType || selectedItem.fields?.visualImageType,
+      visualImageStyle: style || selectedItem.fields?.visualImageStyle || '',
+      visualImageGallery: [nextItem, ...currentGallery],
+    });
+  };
+
+  const handleCharacterImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!result) {
+        setVisualError('角色图读取失败，请重新选择图片。');
+        return;
+      }
+      setVisualPreview(result);
+      saveVisualImageToGallery({
+        image: result,
+        prompt: visualPrompt.trim() || selectedItem?.fields?.visualImagePrompt,
+        style: customVisualStyle.trim() || visualStyle,
+        imageType: visualImageType,
+        source: 'uploaded',
+      });
+      setVisualError('');
+      message.success('角色图已保存到角色图资料库');
+    };
+    reader.onerror = () => {
+      setVisualError('角色图读取失败，请重新选择图片。');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSetVisualGalleryPrimary = (galleryId: string) => {
+    if (!selectedItem || selectedItem.type !== 'character_card') {
+      return;
+    }
+
+    const gallery = selectedItem.fields?.visualImageGallery || [];
+    const target = gallery.find((item) => item.id === galleryId);
+    if (!target) return;
+
+    setVisualPreview(target.image);
+    updateItemFields(selectedItem.id, 'character_card', {
+      ...(selectedItem.fields || {}),
+      visualImage: target.image,
+      visualImagePrompt: target.prompt || selectedItem.fields?.visualImagePrompt || '',
+      visualImageType: target.type || selectedItem.fields?.visualImageType,
+      visualImageStyle: target.style || selectedItem.fields?.visualImageStyle || '',
+      visualImageGallery: gallery,
+    });
+    message.success('已设为当前主图');
+  };
+
+  const handleDeleteVisualGalleryItem = (galleryId: string) => {
+    if (!selectedItem || selectedItem.type !== 'character_card') {
+      return;
+    }
+
+    const gallery = selectedItem.fields?.visualImageGallery || [];
+    const nextGallery = gallery.filter((item) => item.id !== galleryId);
+    const currentMainImage = selectedItem.fields?.visualImage || '';
+    const deletedWasCurrent = gallery.some((item) => item.id === galleryId && item.image === currentMainImage);
+    const nextPrimary = deletedWasCurrent ? nextGallery[0] : gallery.find((item) => item.image === currentMainImage) || nextGallery[0];
+
+    if (deletedWasCurrent) {
+      setVisualPreview(nextPrimary?.image || '');
+    }
+
+    updateItemFields(selectedItem.id, 'character_card', {
+      ...(selectedItem.fields || {}),
+      visualImage: nextPrimary?.image || '',
+      visualImagePrompt: nextPrimary?.prompt || '',
+      visualImageType: nextPrimary?.type,
+      visualImageStyle: nextPrimary?.style || '',
+      visualImageGallery: nextGallery,
+    });
+    message.success('已从角色图资料库删除');
+  };
+
+  const handleUpdateVisualGalleryItem = (galleryId: string, updates: { title?: string; note?: string }) => {
+    if (!selectedItem || selectedItem.type !== 'character_card') {
+      return;
+    }
+
+    const gallery = (selectedItem.fields?.visualImageGallery || []).map((item) =>
+      item.id === galleryId ? { ...item, ...updates } : item
+    );
+
+    updateItemFields(selectedItem.id, 'character_card', {
+      ...(selectedItem.fields || {}),
+      visualImageGallery: gallery,
+    });
+  };
+
+  const handleGenerateCharacterVisualImage = async () => {
+    if (!selectedItem || selectedItem.type !== 'character_card') {
+      message.warning('请先选择一个角色卡。');
+      return;
+    }
+
+    if (!settings.imageModelApiKey) {
+      setVisualError('图片生成 API Key 尚未配置，请先在设置页配置。');
+      return;
+    }
+
+    const style = customVisualStyle.trim() || visualStyle;
+    const prompt = visualPrompt.trim() || buildCurrentCharacterVisualPrompt();
+    if (!prompt) {
+      return;
+    }
+
+    setIsVisualGenerating(true);
+    setVisualError('');
+
+    try {
+      const result = await generateOpenAIImage({
+        apiKey: settings.imageModelApiKey,
+        baseUrl: settings.imageModelBaseUrl,
+        model: settings.imageModelName || DEFAULT_IMAGE_MODEL,
+        prompt,
+        size: visualImageSize,
+        image: visualReferenceImage || undefined,
+      });
+
+      setVisualPreview(result.imageDataUrl);
+      saveVisualImageToGallery({
+        image: result.imageDataUrl,
+        prompt,
+        style,
+        imageType: visualImageType,
+        source: 'generated',
+      });
+      message.success('角色视觉图已生成并保存到角色卡');
+    } catch (error) {
+      const text = error instanceof Error ? error.message : '角色视觉图生成失败，请检查模型、Base URL 或 API Key 后重试。';
+      setVisualError(text);
+      message.error(text);
+    } finally {
+      setIsVisualGenerating(false);
+    }
+  };
 
   // Sync editName when item name changes or new item is selected
   const handleFieldChange = (key: keyof PartnerItemFields, value: any) => {
@@ -1598,51 +1906,70 @@ const Background: React.FC = () => {
                 </span>
               </div>
 
-              {/* Mode Toggle Selector */}
-              <Radio.Group 
-                value={activeMode} 
-                onChange={(e) => setActiveMode(e.target.value)}
-                size="small"
-                style={{
-                  padding: 2,
-                  background: '#faf9f5',
-                  borderRadius: 6,
-                  border: '1px solid rgba(0,0,0,0.03)'
-                }}
-              >
-                <Radio.Button 
-                  value="edit"
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {selectedItem.type === 'character_card' && (
+                  <Button
+                    size="small"
+                    icon={<PictureOutlined />}
+                    onClick={() => setIsVisualModalOpen(true)}
+                    style={{
+                      color: '#d97757',
+                      borderColor: '#f2d6c9',
+                      background: '#fffaf7',
+                      borderRadius: 6,
+                      fontWeight: 500
+                    }}
+                  >
+                    生成角色图
+                  </Button>
+                )}
+
+                {/* Mode Toggle Selector */}
+                <Radio.Group 
+                  value={activeMode} 
+                  onChange={(e) => setActiveMode(e.target.value)}
+                  size="small"
                   style={{
-                    borderRadius: 4,
-                    border: 'none',
-                    background: activeMode === 'edit' ? '#ffffff' : 'transparent',
-                    color: activeMode === 'edit' ? '#d97757' : '#8c8882',
-                    boxShadow: activeMode === 'edit' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
-                    fontWeight: activeMode === 'edit' ? 500 : 400
+                    padding: 2,
+                    background: '#faf9f5',
+                    borderRadius: 6,
+                    border: '1px solid rgba(0,0,0,0.03)'
                   }}
                 >
-                  <Space size={4}>
-                    <EditFilled style={{ fontSize: 11 }} />
-                    <span>编辑配置</span>
-                  </Space>
-                </Radio.Button>
-                <Radio.Button 
-                  value="preview"
-                  style={{
-                    borderRadius: 4,
-                    border: 'none',
-                    background: activeMode === 'preview' ? '#ffffff' : 'transparent',
-                    color: activeMode === 'preview' ? '#d97757' : '#8c8882',
-                    boxShadow: activeMode === 'preview' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
-                    fontWeight: activeMode === 'preview' ? 500 : 400
-                  }}
-                >
-                  <Space size={4}>
-                    <EyeOutlined style={{ fontSize: 11 }} />
-                    <span>效果预览</span>
-                  </Space>
-                </Radio.Button>
-              </Radio.Group>
+                  <Radio.Button 
+                    value="edit"
+                    style={{
+                      borderRadius: 4,
+                      border: 'none',
+                      background: activeMode === 'edit' ? '#ffffff' : 'transparent',
+                      color: activeMode === 'edit' ? '#d97757' : '#8c8882',
+                      boxShadow: activeMode === 'edit' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
+                      fontWeight: activeMode === 'edit' ? 500 : 400
+                    }}
+                  >
+                    <Space size={4}>
+                      <EditFilled style={{ fontSize: 11 }} />
+                      <span>编辑配置</span>
+                    </Space>
+                  </Radio.Button>
+                  <Radio.Button 
+                    value="preview"
+                    style={{
+                      borderRadius: 4,
+                      border: 'none',
+                      background: activeMode === 'preview' ? '#ffffff' : 'transparent',
+                      color: activeMode === 'preview' ? '#d97757' : '#8c8882',
+                      boxShadow: activeMode === 'preview' ? '0 1px 4px rgba(0,0,0,0.05)' : 'none',
+                      fontWeight: activeMode === 'preview' ? 500 : 400
+                    }}
+                  >
+                    <Space size={4}>
+                      <EyeOutlined style={{ fontSize: 11 }} />
+                      <span>效果预览</span>
+                    </Space>
+                  </Radio.Button>
+                </Radio.Group>
+              </div>
             </div>
 
             {/* Scrollable Work Area */}
@@ -1949,6 +2276,231 @@ const Background: React.FC = () => {
       </Modal>
 
       {/* Memory Optimization Review Modal */}
+      <Modal
+        title="生成角色视觉图"
+        open={isVisualModalOpen}
+        onCancel={() => setIsVisualModalOpen(false)}
+        footer={null}
+        width={860}
+        styles={{
+          body: { background: '#faf9f5', padding: '20px 24px' }
+        }}
+      >
+        <div className="character-visual-modal">
+          <section className="character-visual-section">
+            <div className="character-visual-section-title">选择艺术风格</div>
+            <Radio.Group value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>
+              <div className="character-visual-style-grid">
+                {CHARACTER_VISUAL_STYLES.map((style) => (
+                  <Radio.Button key={style.name} value={style.name} className="character-visual-style-card">
+                    <div className="character-visual-style-image-wrap">
+                      <img src={style.image} alt={`${style.name}示例图`} className="character-visual-style-image" />
+                    </div>
+                    <div className="character-visual-style-name">{style.name}</div>
+                    <div className="character-visual-style-description">{style.description}</div>
+                  </Radio.Button>
+                ))}
+              </div>
+            </Radio.Group>
+          </section>
+
+          <section className="character-visual-section">
+            <div className="character-visual-section-title">自定义风格</div>
+            <Input
+              value={customVisualStyle}
+              onChange={(event) => setCustomVisualStyle(event.target.value)}
+              placeholder="例如：紫调月夜、冷白光、细腻厚涂、东方玄幻..."
+            />
+          </section>
+
+          <section className="character-visual-section">
+            <div className="character-visual-section-title">选择生成类型</div>
+            <Radio.Group value={visualImageType} onChange={(event) => setVisualImageType(event.target.value)}>
+              <Space>
+                <Radio value="portrait">角色图</Radio>
+                <Radio value="turnaround">角色三视图</Radio>
+                <Radio value="expression">角色表情图</Radio>
+              </Space>
+            </Radio.Group>
+          </section>
+
+          <section className="character-visual-section">
+            <div className="character-visual-section-title">图片尺寸</div>
+            <Select
+              aria-label="角色视觉图尺寸"
+              value={visualImageSize}
+              onChange={setVisualImageSize}
+              options={IMAGE_SIZE_OPTIONS}
+              style={{ width: '100%' }}
+            />
+          </section>
+
+          <section className="character-visual-section">
+            <div className="character-visual-section-title">上传示例图</div>
+            <label className="character-visual-upload">
+              <input
+                aria-label="上传示例图"
+                type="file"
+                accept="image/*"
+                onChange={handleReferenceImageChange}
+              />
+              <span>{visualReferenceImageName || '选择一张参考图用于图生图'}</span>
+            </label>
+            {visualReferenceImage && (
+              <div className="character-visual-reference-preview">
+                <button
+                  type="button"
+                  className="character-visual-gallery-item"
+                  onClick={() => {
+                    setVisualLightboxImage(visualReferenceImage);
+                    setVisualLightboxTitle('上传示例图预览');
+                  }}
+                >
+                  <img src={visualReferenceImage} alt="上传示例图预览" />
+                </button>
+              </div>
+            )}
+          </section>
+
+          <section className="character-visual-section">
+            <div className="character-visual-section-title">上传角色图到资料库</div>
+            <label className="character-visual-upload">
+              <input
+                aria-label="上传角色图"
+                type="file"
+                accept="image/*"
+                onChange={handleCharacterImageUpload}
+              />
+              <span>直接上传角色图并保存到角色图资料库</span>
+            </label>
+          </section>
+
+          <section className="character-visual-section">
+            <div className="character-visual-section-title">提示词</div>
+            <Input.TextArea
+              aria-label="角色视觉图提示词"
+              value={visualPrompt}
+              onChange={(event) => setVisualPrompt(event.target.value)}
+              placeholder="点击“生成提示词”后可在这里编辑，再点击“生成图片”。"
+              autoSize={{ minRows: 8, maxRows: 16 }}
+            />
+          </section>
+
+          <section className="character-visual-section">
+            {visualError && (
+              <div role="alert" className="character-visual-error">
+                {visualError}
+              </div>
+            )}
+            <div className="character-visual-preview">
+              {visualPreview || selectedItem?.fields?.visualImage ? (
+                <button
+                  type="button"
+                  className="character-visual-gallery-item"
+                  style={{ width: '100%', height: '100%' }}
+                  onClick={() => {
+                    const imageSource = visualPreview || selectedItem?.fields?.visualImage || '';
+                    if (!imageSource) {
+                      return;
+                    }
+                    setVisualLightboxImage(imageSource);
+                    setVisualLightboxTitle('角色视觉图预览');
+                  }}
+                >
+                  <img
+                    src={visualPreview || selectedItem?.fields?.visualImage}
+                    alt="角色视觉图预览"
+                  />
+                </button>
+              ) : (
+                <span>{isVisualGenerating ? '正在生成角色视觉图...' : '生成后将在这里预览角色视觉图'}</span>
+              )}
+            </div>
+          </section>
+
+          {!!selectedItem?.fields?.visualImageGallery?.length && (
+            <section className="character-visual-section">
+              <div className="character-visual-section-title">角色图资料库</div>
+              <div className="character-visual-gallery">
+                {selectedItem.fields.visualImageGallery.map((item, index) => (
+                  <div key={item.id} className="character-visual-gallery-card">
+                    <button
+                      type="button"
+                      className="character-visual-gallery-item"
+                      onClick={() => {
+                        setVisualPreview(item.image);
+                        setVisualLightboxImage(item.image);
+                        setVisualLightboxTitle(item.title?.trim() || `角色图资料库第${index + 1}张`);
+                      }}
+                    >
+                      <img src={item.image} alt={`角色图资料库第${index + 1}张`} />
+                    </button>
+                    <Input
+                      size="small"
+                      aria-label={`角色图名称-${index + 1}`}
+                      placeholder="图片名称"
+                      value={item.title || ''}
+                      onChange={(event) => handleUpdateVisualGalleryItem(item.id, { title: event.target.value })}
+                    />
+                    <Input.TextArea
+                      size="small"
+                      aria-label={`角色图备注-${index + 1}`}
+                      placeholder="备注"
+                      value={item.note || ''}
+                      autoSize={{ minRows: 2, maxRows: 3 }}
+                      onChange={(event) => handleUpdateVisualGalleryItem(item.id, { note: event.target.value })}
+                    />
+                    <div className="character-visual-gallery-actions">
+                      <Button size="small" onClick={() => handleSetVisualGalleryPrimary(item.id)} aria-label={`设为主图-${index + 1}`}>
+                        设为主图
+                      </Button>
+                      <Button size="small" danger onClick={() => handleDeleteVisualGalleryItem(item.id)} aria-label={`删除资料-${index + 1}`}>
+                        删除
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <Button onClick={() => setIsVisualModalOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={handleBuildCharacterVisualPrompt}>
+              生成提示词
+            </Button>
+            <Button
+              type="primary"
+              loading={isVisualGenerating}
+              onClick={handleGenerateCharacterVisualImage}
+            >
+              生成图片
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        title={visualLightboxTitle || '查看图片'}
+        open={!!visualLightboxImage}
+        footer={null}
+        onCancel={() => {
+          setVisualLightboxImage('');
+          setVisualLightboxTitle('');
+        }}
+        width={920}
+      >
+        {visualLightboxImage && (
+          <img
+            src={visualLightboxImage}
+            alt="放大查看图片"
+            style={{ width: '100%', maxHeight: '75vh', objectFit: 'contain', borderRadius: 8, background: '#faf9f5' }}
+          />
+        )}
+      </Modal>
+
       <Modal
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e', fontSize: '16px', fontWeight: 600 }}>

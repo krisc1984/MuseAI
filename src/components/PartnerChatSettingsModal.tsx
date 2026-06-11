@@ -19,9 +19,11 @@ export const PartnerChatSettingsModal: React.FC<PartnerChatSettingsModalProps> =
   const {
     selectedWorldBookId,
     selectedCharacterCardId,
+    selectedUserCharacterCardId,
     userInfo,
     setSelectedWorldBookId,
     setSelectedCharacterCardId,
+    setSelectedUserCharacterCardId,
     setUserInfo
   } = usePartnerChatStore();
 
@@ -31,24 +33,28 @@ export const PartnerChatSettingsModal: React.FC<PartnerChatSettingsModalProps> =
       // Validate selected IDs exist in store, reset if deleted
       const validWorldBookId = worldBooks.some(wb => wb.id === selectedWorldBookId) ? selectedWorldBookId : null;
       const validCharacterCardId = characterCards.some(cc => cc.id === selectedCharacterCardId) ? selectedCharacterCardId : null;
+      const validUserCharacterCardId = characterCards.some(cc => cc.id === selectedUserCharacterCardId) ? selectedUserCharacterCardId : null;
 
       if (validWorldBookId !== selectedWorldBookId) setSelectedWorldBookId(validWorldBookId);
       if (validCharacterCardId !== selectedCharacterCardId) setSelectedCharacterCardId(validCharacterCardId);
+      if (validUserCharacterCardId !== selectedUserCharacterCardId) setSelectedUserCharacterCardId(validUserCharacterCardId);
 
       form.setFieldsValue({
         worldBookId: validWorldBookId,
         characterCardId: validCharacterCardId,
+        userCharacterCardId: validUserCharacterCardId,
         ...userInfo
       });
     }
-  }, [open, selectedWorldBookId, selectedCharacterCardId, userInfo, worldBooks, characterCards]);
+  }, [open, selectedWorldBookId, selectedCharacterCardId, selectedUserCharacterCardId, userInfo, worldBooks, characterCards, form, setSelectedCharacterCardId, setSelectedUserCharacterCardId, setSelectedWorldBookId]);
 
   const handleSave = () => {
     const values = form.getFieldsValue();
-    const { worldBookId, characterCardId, ...profileFields } = values;
+    const { worldBookId, characterCardId, userCharacterCardId, ...profileFields } = values;
 
     setSelectedWorldBookId(worldBookId || null);
     setSelectedCharacterCardId(characterCardId || null);
+    setSelectedUserCharacterCardId(userCharacterCardId || null);
     setUserInfo(profileFields);
 
     message.success('已保存伴侣聊天配置');
@@ -138,6 +144,25 @@ export const PartnerChatSettingsModal: React.FC<PartnerChatSettingsModalProps> =
             <Select
               allowClear
               placeholder="点击选择角色卡（可选）"
+              options={characterCards.map(item => ({ label: item.name, value: item.id }))}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+        </div>
+
+        <div style={{ padding: '0 24px', marginBottom: '20px' }}>
+          <Form.Item
+            label={
+              <span style={{ fontWeight: 500, color: '#33312e' }}>
+                <UserOutlined style={{ marginRight: 6, color: '#d97757' }} />用户人设角色卡
+              </span>
+            }
+            name="userCharacterCardId"
+            help="选中的角色卡将作为“我（用户）的人设设定”优先写入提示词；未选择时仍使用下方手动设定字段"
+          >
+            <Select
+              allowClear
+              placeholder="点击选择用户人设角色卡（可选）"
               options={characterCards.map(item => ({ label: item.name, value: item.id }))}
               style={{ width: '100%' }}
             />

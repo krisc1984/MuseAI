@@ -38,10 +38,18 @@ const characterCard = {
   fields: {},
 };
 
+const userCharacterCard = {
+  id: 'cc-user',
+  name: '顾迟',
+  type: 'character_card' as const,
+  content: '# 角色卡：顾迟\n顾迟角色卡正文',
+  fields: {},
+};
+
 function resetStores(dynamicRoleLoadingEnabled = false) {
   usePartnerStore.setState({
     worldBooks: [worldBook],
-    characterCards: [characterCard],
+    characterCards: [characterCard, userCharacterCard],
     selectedId: null,
     selectedType: null,
   });
@@ -53,6 +61,7 @@ function resetStores(dynamicRoleLoadingEnabled = false) {
     expandedBlocks: {},
     selectedWorldBookId: worldBook.id,
     selectedCharacterCardIds: [characterCard.id],
+    selectedUserCharacterCardId: null,
     sessions: [],
     sessionId: 'story-session-test',
     sessionTitle: '新故事',
@@ -143,6 +152,37 @@ describe('Story dynamic role loading page', () => {
         }),
       );
     });
+  });
+
+  it('prefers selected user character card content in the Story page prompt', async () => {
+    resetStores(true);
+    useStoryStore.setState({
+      selectedUserCharacterCardId: userCharacterCard.id,
+    });
+
+    render(<Story />);
+
+    fireEvent.click(screen.getByRole('button', { name: /开启冒险旅程/ }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'start_chat_completion_stream',
+        expect.objectContaining({
+          request: expect.objectContaining({
+            systemPrompt: expect.stringContaining('顾迟角色卡正文'),
+          }),
+        }),
+      );
+    });
+
+    const startCall = invokeMock.mock.calls.find(([command]) => command === 'start_chat_completion_stream');
+    expect(startCall?.[1]).toEqual(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          systemPrompt: expect.not.stringContaining('风系魔法'),
+        }),
+      }),
+    );
   });
 
   it('renders role_play results as full role chat boxes and keeps generic tools folded', () => {

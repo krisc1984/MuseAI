@@ -36,6 +36,7 @@ export interface StoryPromptOptions {
   worldBookContent: string | null;
   characterCards: StoryCharacterPromptSource[];
   userInfo: Record<string, unknown>;
+  userCharacterCardContent?: string | null;
   dynamicRoleLoadingEnabled: boolean;
 }
 
@@ -80,6 +81,7 @@ export function compileStorySystemPrompt({
   worldBookContent,
   characterCards,
   userInfo,
+  userCharacterCardContent,
   dynamicRoleLoadingEnabled,
 }: StoryPromptOptions): string {
   let prompt = basePrompt.trim();
@@ -104,9 +106,13 @@ export function compileStorySystemPrompt({
     });
   }
 
-  const userFields = formatUserInfo(userInfo);
-  if (userFields) {
-    prompt += `\n\n## 我（用户）的角色人设设定\n这是用户所扮演的冒险主角人设设定，请记住此人设并以此决定NPC们对他的态度与互动反应：\n${userFields}`;
+  if (userCharacterCardContent && userCharacterCardContent.trim()) {
+    prompt += `\n\n## 我（用户）的角色人设设定\n这是用户在本次冒险中所扮演的主角角色卡，请将用户视为这张角色卡中的人物，并据此决定NPC们对他的态度、互动反应与剧情推动：\n${filterBlankMarkdownFields(userCharacterCardContent.trim())}`;
+  } else {
+    const userFields = formatUserInfo(userInfo);
+    if (userFields) {
+      prompt += `\n\n## 我（用户）的角色人设设定\n这是用户所扮演的冒险主角人设设定，请记住此人设并以此决定NPC们对他的态度与互动反应：\n${userFields}`;
+    }
   }
 
   return prompt;

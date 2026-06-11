@@ -3,6 +3,8 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use base64::{engine::general_purpose, Engine as _};
+use reqwest::blocking;
+use reqwest::blocking::multipart;
 use tauri::Emitter;
 
 use crate::models::*;
@@ -93,6 +95,131 @@ pub fn write_file(app: tauri::AppHandle, path: String, content: String) -> Resul
     fs::write(&path, content).map_err(|e| e.to_string())?;
     let _ = app.emit("workspace-changed", ());
     file_modified_at(path)
+}
+
+#[tauri::command]
+pub fn write_image_asset(app: tauri::AppHandle, path: String, source: String) -> Result<u64, String> {
+    let target = Path::new(&path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let bytes = if let Some((_, data)) = source.split_once(",") {
+        if source.starts_with("data:image/") {
+            general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| format!("图片数据解码失败: {}", e))?
+        } else {
+            return Err("仅支持图片 data URL 或图片链接".to_string());
+        }
+    } else if source.starts_with("http://") || source.starts_with("https://") {
+        let response = blocking::get(&source).map_err(|e| format!("下载图片失败: {}", e))?;
+        if !response.status().is_success() {
+            return Err(format!("下载图片失败: HTTP {}", response.status()));
+        }
+        response.bytes().map_err(|e| format!("读取图片失败: {}", e))?.to_vec()
+    } else {
+        return Err("仅支持图片 data URL 或图片链接".to_string());
+    };
+
+    fs::write(target, bytes).map_err(|e| e.to_string())?;
+    let _ = app.emit("workspace-changed", ());
+    file_modified_at(path)
+}
+
+#[tauri::command]
+pub fn write_media_asset(app: tauri::AppHandle, path: String, source: String) -> Result<u64, String> {
+    let target = Path::new(&path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let bytes = if let Some((meta, data)) = source.split_once(",") {
+        if meta.starts_with("data:video/") || meta.starts_with("data:image/") {
+            general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| format!("媒体数据解码失败: {}", e))?
+        } else {
+            return Err("仅支持图片/视频 data URL 或媒体链接".to_string());
+        }
+    } else if source.starts_with("http://") || source.starts_with("https://") {
+        let response = blocking::get(&source).map_err(|e| format!("下载媒体失败: {}", e))?;
+        if !response.status().is_success() {
+            return Err(format!("下载媒体失败: HTTP {}", response.status()));
+        }
+        response.bytes().map_err(|e| format!("读取媒体失败: {}", e))?.to_vec()
+    } else {
+        return Err("仅支持图片/视频 data URL 或媒体链接".to_string());
+    };
+
+    fs::write(target, bytes).map_err(|e| e.to_string())?;
+    let _ = app.emit("workspace-changed", ());
+    file_modified_at(path)
+}
+
+#[tauri::command]
+pub fn upload_temp_image(source: String) -> Result<String, String> {
+    let (bytes, filename, mime) = if let Some((meta, data)) = source.split_once(",") {
+        if !meta.starts_with("data:image/") {
+            return Err("仅支持图片上传到临时图床".to_string());
+        }
+        let mime = meta
+            .trim_start_matches("data:")
+            .trim_end_matches(";base64")
+            .to_string();
+        let extension = mime.split('/').nth(1).unwrap_or("png");
+        let bytes = general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| format!("图片数据解码失败: {}", e))?;
+        (bytes, format!("upload.{}", extension), mime)
+    } else if source.starts_with("http://") || source.starts_with("https://") {
+        let response = blocking::get(&source).map_err(|e| format!("下载图片失败: {}", e))?;
+        if !response.status().is_success() {
+            return Err(format!("下载图片失败: HTTP {}", response.status()));
+        }
+        let mime = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("image/png")
+            .to_string();
+        if !mime.starts_with("image/") {
+            return Err("远程资源不是图片，无法上传到临时图床".to_string());
+        }
+        let extension = mime.split('/').nth(1).unwrap_or("png");
+        let bytes = response.bytes().map_err(|e| format!("读取图片失败: {}", e))?.to_vec();
+        (bytes, format!("upload.{}", extension), mime)
+    } else {
+        return Err("仅支持 data URL 或 http(s) 图片链接上传".to_string());
+    };
+
+    let client = blocking::Client::new();
+    let part = multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(&mime)
+        .map_err(|e| format!("构造上传文件失败: {}", e))?;
+    let form = multipart::Form::new()
+        .text("reqtype", "fileupload")
+        .text("time", "72h")
+        .part("fileToUpload", part);
+
+    let response = client
+        .post("https://litterbox.catbox.moe/resources/internals/api.php")
+        .multipart(form)
+        .send()
+        .map_err(|e| format!("上传到临时图床失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("上传到临时图床失败: HTTP {}", response.status()));
+    }
+
+    let url = response.text().map_err(|e| format!("读取图床返回失败: {}", e))?;
+    let trimmed = url.trim().to_string();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        Ok(trimmed)
+    } else {
+        Err(format!("图床返回异常: {}", trimmed))
+    }
 }
 
 #[tauri::command]

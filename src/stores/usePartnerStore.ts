@@ -9,6 +9,18 @@ export interface CustomField {
   value: string;
 }
 
+export interface CharacterVisualGalleryItem {
+  id: string;
+  image: string;
+  type?: 'portrait' | 'turnaround' | 'expression';
+  style?: string;
+  prompt?: string;
+  title?: string;
+  note?: string;
+  source?: 'generated' | 'uploaded';
+  tempImageUrl?: string;
+}
+
 export interface PartnerItemFields {
   // 世界书字段
   theme?: string;         // 主题
@@ -69,6 +81,13 @@ export interface PartnerItemFields {
   userInteractionModel?: string; // 与用户相处模式
   userRelationBottomLine?: string; // 与用户关系底线
   keyEvents?: string;      // 关键事件
+
+  // 角色视觉图
+  visualImage?: string;
+  visualImagePrompt?: string;
+  visualImageType?: 'portrait' | 'turnaround' | 'expression';
+  visualImageStyle?: string;
+  visualImageGallery?: CharacterVisualGalleryItem[];
 
   // 自定义字段
   customFields?: CustomField[];
@@ -138,6 +157,33 @@ const normalizeCustomFields = (fields?: CustomField[]): CustomField[] | undefine
   }));
 };
 
+const normalizeVisualImageGallery = (items?: CharacterVisualGalleryItem[]): CharacterVisualGalleryItem[] | undefined => {
+  if (!Array.isArray(items)) return undefined;
+
+  const normalized: CharacterVisualGalleryItem[] = [];
+
+  items.forEach((item, index) => {
+      const image = fieldToText(item?.image);
+      if (!image) return;
+
+      const type = fieldToText(item?.type);
+      const source = fieldToText(item?.source);
+      normalized.push({
+        id: fieldToText(item?.id) || `visual-gallery-${Date.now()}-${index}`,
+        image,
+        type: type === 'portrait' || type === 'turnaround' || type === 'expression' ? type : undefined,
+        style: fieldToText(item?.style) || undefined,
+        prompt: fieldToText(item?.prompt) || undefined,
+        title: fieldToText(item?.title) || undefined,
+        note: fieldToText(item?.note) || undefined,
+        source: source === 'generated' || source === 'uploaded' ? source : undefined,
+        tempImageUrl: fieldToText(item?.tempImageUrl) || undefined,
+      });
+    });
+
+  return normalized.length > 0 ? normalized : undefined;
+};
+
 export const normalizePartnerFields = (fields?: PartnerItemFields): PartnerItemFields => {
   const source = (fields || {}) as Record<string, unknown>;
   const normalized: PartnerItemFields = {};
@@ -178,6 +224,9 @@ export const normalizePartnerFields = (fields?: PartnerItemFields): PartnerItemF
     'userInteractionModel',
     'userRelationBottomLine',
     'keyEvents',
+    'visualImage',
+    'visualImagePrompt',
+    'visualImageStyle',
   ] as const;
 
   textFields.forEach((key) => {
@@ -186,6 +235,11 @@ export const normalizePartnerFields = (fields?: PartnerItemFields): PartnerItemF
       normalized[key] = value;
     }
   });
+
+  const visualImageType = fieldToText(source.visualImageType);
+  if (visualImageType === 'portrait' || visualImageType === 'turnaround' || visualImageType === 'expression') {
+    normalized.visualImageType = visualImageType;
+  }
 
   const identityTags = source.identityTags;
   if (Array.isArray(identityTags)) {
@@ -203,6 +257,11 @@ export const normalizePartnerFields = (fields?: PartnerItemFields): PartnerItemF
   const customFields = normalizeCustomFields(source.customFields as CustomField[] | undefined);
   if (customFields) {
     normalized.customFields = customFields;
+  }
+
+  const visualImageGallery = normalizeVisualImageGallery(source.visualImageGallery as CharacterVisualGalleryItem[] | undefined);
+  if (visualImageGallery) {
+    normalized.visualImageGallery = visualImageGallery;
   }
 
   return normalized;
@@ -240,6 +299,23 @@ const compileCustomFields = (fields?: CustomField[]): string => {
 
   if (sections.length === 0) return '';
   return `## 自定义补充设定\n\n${sections.join('')}`;
+};
+
+const VISUAL_IMAGE_TYPE_LABELS: Record<string, string> = {
+  portrait: '角色图',
+  turnaround: '角色三视图',
+  expression: '角色表情图',
+};
+
+const buildCharacterVisualSection = (fields: PartnerItemFields) => {
+  const lines = [
+    formatFieldLine('图片类型', fields.visualImageType ? VISUAL_IMAGE_TYPE_LABELS[fields.visualImageType] || fields.visualImageType : ''),
+    formatFieldLine('艺术风格', fields.visualImageStyle),
+    formatFieldLine('图片提示词', fields.visualImagePrompt),
+  ].filter(Boolean);
+
+  if (lines.length === 0) return '';
+  return `## 角色视觉图\n${lines.join('\n')}\n\n`;
 };
 
 export const compileItemToMarkdown = (name: string, type: 'world_book' | 'character_card', fields: PartnerItemFields): string => {
@@ -295,8 +371,9 @@ export const compileItemToMarkdown = (name: string, type: 'world_book' | 'charac
       { label: '与用户关系底线', value: fields.userRelationBottomLine },
     ]);
     const events = (fields.keyEvents || '').trim() ? `## 关键事件\n${fields.keyEvents}\n\n` : '';
+    const visual = buildCharacterVisualSection(fields);
     const custom = compileCustomFields(fields.customFields);
-    return `# 角色卡：${name}\n\n${basic}${identity}${appearance}${personality}${skills}${background}${relationships}${speaking}${reactions}${memory}${events}${custom}`.trim() + '\n';
+    return `# 角色卡：${name}\n\n${basic}${identity}${appearance}${personality}${skills}${background}${relationships}${speaking}${reactions}${memory}${events}${visual}${custom}`.trim() + '\n';
   }
 };
 

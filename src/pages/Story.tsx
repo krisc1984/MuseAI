@@ -68,6 +68,7 @@ const Story: React.FC = () => {
     expandedBlocks, setExpandedBlocks,
     selectedWorldBookId, setSelectedWorldBookId,
     selectedCharacterCardIds, setSelectedCharacterCardIds,
+    selectedUserCharacterCardId, setSelectedUserCharacterCardId,
     sessions, setSessions,
     sessionId, setSessionId,
     sessionTitle, setSessionTitle,
@@ -277,6 +278,7 @@ const Story: React.FC = () => {
 
   const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId) || null;
   const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
+  const selectedUserCharacterCard = characterCards.find(cc => cc.id === selectedUserCharacterCardId) || null;
   const storyAllowedTools = getStoryAllowedTools(dynamicRoleLoadingEnabled);
   const rolePlayContext = dynamicRoleLoadingEnabled ? {
     chatSystemPrompt: settings.partnerChatPrompt || '',
@@ -298,6 +300,7 @@ const Story: React.FC = () => {
     worldBookContent: selectedWorldBook ? selectedWorldBook.content : null,
     characterCards: selectedCards.map((card) => ({ name: card.name, content: card.content })),
     userInfo: partnerChatUserInfo,
+    userCharacterCardContent: selectedUserCharacterCard?.content || null,
     dynamicRoleLoadingEnabled,
   });
   const storyAgentConfigId = dynamicRoleLoadingEnabled ? 'storyDynamicAgent' : 'storyAgent';
@@ -653,6 +656,7 @@ const Story: React.FC = () => {
           contextCompaction: contextCompactionRef.current,
           isArchived: isSessionArchivedRef.current,
           selectedWorldBookId,
+          selectedUserCharacterCardId,
           dynamicRoleLoadingEnabled,
           characterCardIds: selectedCharacterCardIdsRef.current
         }
@@ -673,6 +677,7 @@ const Story: React.FC = () => {
       setMessages(session.messages);
       setSelectedWorldBookId(session.selectedWorldBookId ?? null);
       setSelectedCharacterCardIds(session.characterCardIds ?? []);
+      setSelectedUserCharacterCardId(session.selectedUserCharacterCardId ?? null);
       setDynamicRoleLoadingEnabled(session.dynamicRoleLoadingEnabled ?? false);
       contextCompactionRef.current = session.contextCompaction ?? null;
       setContextCompaction(session.contextCompaction ?? null);
@@ -1042,14 +1047,32 @@ const Story: React.FC = () => {
 
       {/* Header */}
       <div className="agent-chat__header" style={{ borderBottom: '1px solid #eae6df', padding: '16px 24px' }}>
-        <div className="agent-chat__title">
-          <CompassOutlined style={{ color: '#d97757', fontSize: 18 }} />
-          <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {sessionTitle}
-            <span style={{ fontSize: 12, color: '#8c8882', fontWeight: 400 }}>
-              ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色{dynamicRoleLoadingEnabled ? ' · 动态加载' : ''})
-            </span>
-          </h3>
+        <div className="agent-chat__title" style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <CompassOutlined style={{ color: '#d97757', fontSize: 18 }} />
+            <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {sessionTitle}
+              <span style={{ fontSize: 12, color: '#8c8882', fontWeight: 400 }}>
+                ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色{dynamicRoleLoadingEnabled ? ' · 动态加载' : ''})
+              </span>
+            </h3>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <Tag color={selectedUserCharacterCard ? 'orange' : 'default'} style={{ margin: 0, padding: '4px 10px', borderRadius: '999px' }}>
+              我当前扮演：{selectedUserCharacterCard?.name || '未选择'}
+            </Tag>
+            <Select
+              allowClear
+              value={selectedUserCharacterCardId}
+              placeholder="切换用户人设"
+              onChange={(value) => {
+                setSelectedUserCharacterCardId(value);
+                void saveCurrentSession();
+              }}
+              style={{ width: 180 }}
+              options={characterCards.map((card) => ({ value: card.id, label: card.name }))}
+            />
+          </div>
         </div>
 
         <div className="agent-chat__header-actions">
@@ -1368,6 +1391,23 @@ const Story: React.FC = () => {
                 style={{ width: '100%' }}
                 options={worldBooks.map((wb) => ({ value: wb.id, label: wb.name }))}
               />
+            </div>
+
+            <div>
+            <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px' }}>
+              选择用户人设角色卡 (可选)
+            </div>
+              <Select
+                allowClear
+                placeholder="选择一个角色卡作为“我”的人设..."
+                value={selectedUserCharacterCardId}
+                onChange={setSelectedUserCharacterCardId}
+                style={{ width: '100%' }}
+                options={characterCards.map((cc) => ({ value: cc.id, label: cc.name }))}
+              />
+              <div style={{ fontSize: '12px', color: '#8c8882', marginTop: '6px' }}>
+                选中后会优先用该角色卡描述你的身份与设定；未选择时继续使用聊天配置中的手动个人设定。
+              </div>
             </div>
 
             {/* Character Cards Multi Selector */}

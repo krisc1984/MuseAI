@@ -36,6 +36,7 @@ const MobileStory: React.FC = () => {
     expandedBlocks,
     selectedWorldBookId,
     selectedCharacterCardIds,
+    selectedUserCharacterCardId,
     sessions,
     sessionId,
     sessionTitle,
@@ -50,6 +51,7 @@ const MobileStory: React.FC = () => {
     setExpandedBlocks,
     setSelectedWorldBookId,
     setSelectedCharacterCardIds,
+    setSelectedUserCharacterCardId,
     setSessions,
     setSessionId,
     setSessionTitle,
@@ -128,6 +130,7 @@ const MobileStory: React.FC = () => {
         contextCompaction: null,
         isArchived: isSessionArchived,
         characterCardIds: selectedCharacterCardIds,
+        selectedUserCharacterCardId,
         selectedWorldBookId,
         dynamicRoleLoadingEnabled,
       };
@@ -154,6 +157,7 @@ const MobileStory: React.FC = () => {
       setSessionTitle(record.title);
       setMessages(record.messages || []);
       setSelectedCharacterCardIds(record.characterCardIds ?? record.character_card_ids ?? []);
+      setSelectedUserCharacterCardId(record.selectedUserCharacterCardId ?? record.selected_user_character_card_id ?? null);
       setSelectedWorldBookId(record.selectedWorldBookId ?? record.selected_world_book_id ?? null);
       setIsSessionArchived(record.isArchived ?? record.is_archived ?? false);
       setDynamicRoleLoadingEnabled(record.dynamicRoleLoadingEnabled ?? record.dynamic_role_loading_enabled ?? false);
@@ -229,6 +233,7 @@ const MobileStory: React.FC = () => {
   ) => {
     const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId);
     const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
+    const selectedUserCharacterCard = characterCards.find(cc => cc.id === selectedUserCharacterCardId);
 
     // Construct settings from partner-store locally if empty
     const partnerChatUserInfo = {};
@@ -242,6 +247,7 @@ const MobileStory: React.FC = () => {
       worldBookContent: selectedWorldBook?.content || null,
       characterCards: selectedCards.map(c => ({ name: c.name, content: c.content })),
       userInfo: partnerChatUserInfo,
+      userCharacterCardContent: selectedUserCharacterCard?.content || null,
       dynamicRoleLoadingEnabled,
     });
 
@@ -707,6 +713,21 @@ const MobileStory: React.FC = () => {
               />
             </div>
 
+            <div>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#33312e', marginBottom: '12px' }}>第三步：选择用户人设角色卡（可选）</h3>
+              <Select
+                placeholder="选择一个角色卡作为“我”的人设..."
+                value={selectedUserCharacterCardId}
+                onChange={setSelectedUserCharacterCardId}
+                style={{ width: '100%', fontSize: '16px' }}
+                allowClear
+                options={characterCards.map(cc => ({ value: cc.id, label: cc.name }))}
+              />
+              <div style={{ marginTop: '6px', fontSize: '12px', color: '#8c8880' }}>
+                选中后会优先使用该角色卡作为你的冒险身份设定。
+              </div>
+            </div>
+
             <div style={{
               display: 'flex',
               alignItems: 'center',
@@ -728,7 +749,7 @@ const MobileStory: React.FC = () => {
             </div>
 
             <div>
-              <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#33312e', marginBottom: '12px' }}>第三步：设定冒险起因 (剧情开端)</h3>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#33312e', marginBottom: '12px' }}>第四步：设定冒险起因 (剧情开端)</h3>
               <Input.TextArea
                 value={initialPlot}
                 onChange={(e) => setInitialPlot(e.target.value)}
@@ -764,21 +785,38 @@ const MobileStory: React.FC = () => {
               backgroundColor: '#fff',
               borderBottom: '1px solid rgba(217, 119, 87, 0.05)',
               display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
+              flexDirection: 'column',
+              alignItems: 'stretch',
+              gap: '8px',
               fontSize: '11px',
               color: '#8c8880',
               flexShrink: 0,
             }}>
-              <BookOutlined style={{ color: '#d97757' }} />
-              <span>
-                参与角色：{
-                  characterCards
-                    .filter(c => selectedCharacterCardIds.includes(c.id))
-                    .map(c => c.name)
-                    .join('，')
-                }
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <BookOutlined style={{ color: '#d97757' }} />
+                <span>
+                  参与角色：{
+                    characterCards
+                      .filter(c => selectedCharacterCardIds.includes(c.id))
+                      .map(c => c.name)
+                      .join('，')
+                  }
+                </span>
+                <span>
+                  我当前扮演：{characterCards.find(c => c.id === selectedUserCharacterCardId)?.name || '未选择'}
+                </span>
+              </div>
+              <Select
+                value={selectedUserCharacterCardId}
+                onChange={(id) => {
+                  setSelectedUserCharacterCardId(id);
+                  saveCurrentSession();
+                }}
+                style={{ width: '100%' }}
+                placeholder="切换我的人设..."
+                allowClear
+                options={characterCards.map(card => ({ value: card.id, label: card.name }))}
+              />
             </div>
 
             {/* Chat list */}
