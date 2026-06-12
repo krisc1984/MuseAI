@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { Message, AgentToolEntry, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction } from '../stores/useAgentStore';
+import { createStableContentKey, createStableToolKey } from '../utils/renderKeys';
 
 interface ChatStreamEvent {
   runId: string;
@@ -694,24 +695,27 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
               {(() => {
                 const parts = msg.content ? msg.content.split(/(\[\[(?:TOOL|THINKING):[^\]]+\]\])/) : [msg.role === 'agent' && isRunning ? ' ' : ''];
                 const renderedToolIds = new Set<string>();
+                const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
+                const getToolKey = createStableToolKey(`${msg.id}-tool`);
                 
-                const renderedParts = parts.map((part, i) => {
+                const renderedParts = parts.map((part) => {
                   const toolMatch = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
                   if (toolMatch) {
                     const toolId = toolMatch[1];
                     const toolIndex = msg.tools?.findIndex(t => t.id === toolId);
                     if (toolIndex !== undefined && toolIndex >= 0) {
                       const tool = msg.tools![toolIndex];
+                      const toolKey = getToolKey(tool);
                       renderedToolIds.add(toolId);
                       return (
                         <FoldBlock
                           icon={<ToolOutlined />}
                           variant="tool"
-                          key={`tool-${tool.id || i}`}
+                          key={toolKey}
                           title={`工具：${tool.name}`}
                           preview={tool.result}
-                          expanded={Boolean(expandedBlocks[`${msg.id}-tool-${toolIndex}`])}
-                          onToggle={() => toggleBlock(`${msg.id}-tool-${toolIndex}`)}
+                          expanded={Boolean(expandedBlocks[toolKey])}
+                          onToggle={() => toggleBlock(toolKey)}
                         />
                       );
                     }
@@ -739,7 +743,7 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
                   }
                   
                   return part.trim() ? (
-                    <div className="agent-markdown" key={`md-${i}`}>
+                    <div className="agent-markdown" key={getMarkdownPartKey(part)}>
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {part}
                       </ReactMarkdown>
@@ -747,17 +751,18 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
                   ) : null;
                 });
                 
-                const unrenderedTools = msg.tools?.map((tool, index) => {
+                const unrenderedTools = msg.tools?.map((tool) => {
                   if (tool.id && renderedToolIds.has(tool.id)) return null;
+                  const toolKey = getToolKey(tool);
                   return (
                     <FoldBlock
                       icon={<ToolOutlined />}
                       variant="tool"
-                      key={`unrendered-tool-${index}`}
+                      key={toolKey}
                       title={`工具：${tool.name}`}
                       preview={tool.result}
-                      expanded={Boolean(expandedBlocks[`${msg.id}-tool-${index}`])}
-                      onToggle={() => toggleBlock(`${msg.id}-tool-${index}`)}
+                      expanded={Boolean(expandedBlocks[toolKey])}
+                      onToggle={() => toggleBlock(toolKey)}
                     />
                   );
                 });

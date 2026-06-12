@@ -1,11 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { Modal } from 'antd';
 import Story from '../pages/Story';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
-import { useBookTravelStore } from '../stores/useBookTravelStore';
+import { useBookTravelStore, type BookTravelSnapshot } from '../stores/useBookTravelStore';
 
 function renderWithRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
@@ -254,6 +254,31 @@ function setActiveBookTravelScene() {
       createdBeatIds: ['beat-1'],
     }],
   });
+}
+
+function getCurrentBookTravelSnapshot(overrides: Partial<BookTravelSnapshot> = {}): BookTravelSnapshot {
+  const state = useBookTravelStore.getState();
+  return {
+    selectedOutline: state.selectedOutline,
+    selectedWorldBook: state.selectedWorldBook,
+    selectedCharacterCards: state.selectedCharacterCards,
+    assembledWorldModel: state.assembledWorldModel,
+    stableMemory: state.stableMemory,
+    volatileMemory: state.volatileMemory,
+    entryPoints: state.entryPoints,
+    recommendedUserCharacters: state.recommendedUserCharacters,
+    selectedEntryPointId: state.selectedEntryPointId,
+    userCharacter: state.userCharacter,
+    currentState: state.currentState,
+    scenes: state.scenes,
+    currentSceneId: state.currentSceneId,
+    currentBeatId: state.currentBeatId,
+    turns: state.turns,
+    summaryMemory: state.summaryMemory,
+    isCompleted: state.isCompleted,
+    ending: state.ending,
+    ...overrides,
+  };
 }
 
 describe('Story book-travel mode', () => {
@@ -708,13 +733,103 @@ describe('Story book-travel mode', () => {
   });
 
   it('uses the current scene title when saving book-travel progress', () => {
+    const materialId = saveReadyMaterial();
     setActiveBookTravelScene();
+    useBookTravelStore.setState({ selectedMaterialId: materialId });
 
     renderWithRouter(<Story />);
 
-    fireEvent.click(screen.getByRole('button', { name: /保存进度/ }));
+    fireEvent.click(screen.getByRole('button', { name: '保存进度' }));
 
     expect(useBookTravelStore.getState().savedProgresses[0]?.title).toBe('沈府婚宴');
+    expect(useBookTravelStore.getState().savedProgresses[0]?.materialId).toBe(materialId);
+  });
+
+  it('opens saved book-travel progress in a modal with material filtering and fallback labels', async () => {
+    const firstMaterialId = saveReadyMaterial();
+    const secondMaterialId = useBookTravelStore.getState().saveAssembledMaterial({
+      title: '第二卷 · 北境迷局',
+      materials: {
+        outline: { id: '/outline/第二卷.md', title: '第二卷.md', path: '/outline/第二卷.md', content: '第二卷大纲' },
+        worldBook: { id: 'wb-north', title: '北境世界', content: '北境世界书' },
+        characterCards: [{ id: 'cc-north', title: '雪线斥候', content: '雪线斥候正文' }],
+      },
+      assembledWorldModel: { originalTimeline: ['北境原线'] },
+      stableMemory: null,
+      volatileMemory: null,
+      entryPoints: [],
+      recommendedUserCharacters: [],
+    });
+    setActiveBookTravelScene();
+    useBookTravelStore.setState({
+      selectedMaterialId: firstMaterialId,
+      savedProgresses: [
+        {
+          id: 'progress-1',
+          title: '沈府婚宴',
+          savedAt: 1717951140000,
+          materialId: firstMaterialId,
+          sessionKey: `${firstMaterialId}-entry-1-林晚`,
+          snapshot: getCurrentBookTravelSnapshot(),
+        } as any,
+        {
+          id: 'progress-2',
+          title: '北境开局',
+          savedAt: 1717864800000,
+          materialId: secondMaterialId,
+          sessionKey: `${secondMaterialId}-entry-1-林晚`,
+          snapshot: getCurrentBookTravelSnapshot({
+            selectedOutline: { id: '/outline/第二卷.md', title: '第二卷.md', path: '/outline/第二卷.md', content: '第二卷大纲' },
+          }),
+        } as any,
+        {
+          id: 'progress-legacy',
+          title: '旧进度',
+          savedAt: 1717778400000,
+          sessionKey: `${firstMaterialId}-entry-1-林晚`,
+          snapshot: getCurrentBookTravelSnapshot(),
+        } as any,
+        {
+          id: 'progress-missing',
+          title: '孤立进度',
+          savedAt: 1717692000000,
+          sessionKey: 'none-entry-1-林晚',
+          snapshot: getCurrentBookTravelSnapshot({
+            selectedOutline: { id: '/outline/未知.md', title: '未知.md', path: '/outline/未知.md', content: '未知' },
+            selectedWorldBook: null,
+            selectedCharacterCards: [],
+          }),
+        } as any,
+      ],
+    });
+
+    renderWithRouter(<Story />);
+    fireEvent.click(screen.getByRole('button', { name: '穿书保存进度' }));
+
+    expect(await screen.findByText('穿书进度')).toBeInTheDocument();
+    let dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('沈府婚宴')).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/第一卷 · 云州入场/)).not.toHaveLength(0);
+    expect(within(dialog).getByText('旧进度')).toBeInTheDocument();
+    expect(within(dialog).getByText('孤立进度')).toBeInTheDocument();
+    expect(within(dialog).getByText(/未匹配穿书素材/)).toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByLabelText('按穿书素材筛选'));
+    const materialOptions = await screen.findAllByText('第二卷 · 北境迷局');
+    fireEvent.click(materialOptions[materialOptions.length - 1]);
+    expect(within(dialog).queryByText('沈府婚宴')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('北境开局')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '打开北境开局' }));
+    await waitFor(() => {
+      expect(useBookTravelStore.getState().selectedOutline?.id).toBe('/outline/第二卷.md');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '穿书保存进度' }));
+    expect(await screen.findByText('穿书进度')).toBeInTheDocument();
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: '删除北境开局' }));
+    expect(useBookTravelStore.getState().savedProgresses.some((progress) => progress.id === 'progress-2')).toBe(false);
   });
 
   it('classifies book-travel input only as beat insertion or scene change at zero temperature', async () => {

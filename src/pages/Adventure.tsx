@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox, Switch, Tree } from 'antd';
+import { Button, Tooltip, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox, Switch, Tree } from 'antd';
 import {
   BookOutlined,
   BulbOutlined,
@@ -9,7 +9,6 @@ import {
   StopOutlined,
   PlayCircleOutlined,
   InfoCircleOutlined,
-  DeleteOutlined,
   UserOutlined,
   FileProtectOutlined,
   SaveOutlined,
@@ -30,6 +29,7 @@ import { useStoryStore } from '../stores/useStoryStore';
 import { useBookTravelStore } from '../stores/useBookTravelStore';
 
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
+import { SessionHistoryModal } from '../components/SessionHistoryModal';
 import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
 import {
   buildStoryModelMessages,
@@ -39,6 +39,7 @@ import {
 } from './storyAgent';
 import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
 import { getCharacterCardIdsForWorldBook, groupCharacterCardsByWorldBook } from '../utils/characterCardGroups';
+import { createStableContentKey, createStableToolKey } from '../utils/renderKeys';
 
 interface ChatStreamEvent {
   runId: string;
@@ -52,12 +53,6 @@ interface ChatStreamEvent {
   contextCompaction?: SessionContextCompaction;
 }
 
-const sessionDateFormatter = new Intl.DateTimeFormat('zh-CN', {
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-});
 const BACKGROUND_LINK_BUTTON_STYLE: React.CSSProperties = {
   fontSize: '12px',
   fontWeight: 400,
@@ -169,6 +164,8 @@ const Adventure: React.FC = () => {
   useEffect(() => { isSessionArchivedRef.current = isSessionArchived; }, [isSessionArchived]);
   useEffect(() => { selectedCharacterCardIdsRef.current = selectedCharacterCardIds; }, [selectedCharacterCardIds]);
   useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
+
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   useEffect(() => {
     void refreshSessions();
@@ -1248,46 +1245,31 @@ const Adventure: React.FC = () => {
             <Button type="text" icon={<ReloadOutlined />} onClick={createNewSession} />
           </Tooltip>
 
-          <Dropdown
-            menu={{
-              items: sessions.length > 0
-                ? sessions.map((session) => ({
-                  key: session.id,
-                  label: (
-                    <div className="agent-session-menu-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 200, padding: '4px 0' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
-                        <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{session.title}</strong>
-                        <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>
-                          {session.savedAt ? sessionDateFormatter.format(new Date(session.savedAt)) : '未保存'}
-                        </span>
-                      </div>
-                      <Button
-                        type="text"
-                        danger
-                        size="small"
-                        icon={<DeleteOutlined />}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDeleteSession(session.id);
-                        }}
-                      />
-                    </div>
-                  ),
-                }))
-                : [{ key: 'empty', disabled: true, label: '暂无历史冒险' }],
-              onClick: ({ key }) => {
-                if (key !== 'empty') void openSession(String(key));
-              },
-            }}
-            placement="bottomRight"
-            trigger={['click']}
-          >
-            <Tooltip title="历史记录">
-              <Button type="text" icon={<HistoryOutlined />} onClick={() => void refreshSessions()} />
-            </Tooltip>
-          </Dropdown>
+          <Tooltip title="历史记录">
+            <Button
+              aria-label="历史记录"
+              type="text"
+              icon={<HistoryOutlined />}
+              onClick={() => {
+                void refreshSessions();
+                setIsHistoryOpen(true);
+              }}
+            />
+          </Tooltip>
         </div>
       </div>
+
+      <SessionHistoryModal
+        open={isHistoryOpen}
+        title="历史冒险"
+        emptyText="暂无历史冒险"
+        sessions={sessions}
+        worldBooks={worldBooks}
+        characterCards={characterCards}
+        onClose={() => setIsHistoryOpen(false)}
+        onOpenSession={openSession}
+        onDeleteSession={handleDeleteSession}
+      />
 
       {/* Main chat layout */}
       {hasMessages ? (
@@ -1380,20 +1362,22 @@ const Adventure: React.FC = () => {
                         {(() => {
                           const parts = msg.content ? msg.content.split(/(\[\[(?:TOOL|THINKING):[^\]]+\]\])/) : [''];
                           const renderedToolIds = new Set<string>();
+                          const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
+                          const getToolKey = createStableToolKey(`${msg.id}-tool`);
 
-                          const renderedParts = parts.map((part, i) => {
+                          const renderedParts = parts.map((part) => {
                             const toolMatch = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
                             if (toolMatch) {
                               const toolId = toolMatch[1];
-                              const toolIndex = msg.tools?.findIndex(t => t.id === toolId);
-                              if (toolIndex !== undefined && toolIndex >= 0) {
-                                const tool = msg.tools![toolIndex];
+                              const tool = msg.tools?.find(t => t.id === toolId);
+                              if (tool) {
+                                const toolKey = getToolKey(tool);
                                 renderedToolIds.add(toolId);
                                 return renderStoryTool(
                                   tool,
-                                  `${msg.id}-tool-${toolIndex}`,
-                                  Boolean(expandedBlocks[`${msg.id}-tool-${toolIndex}`]),
-                                  () => toggleBlock(`${msg.id}-tool-${toolIndex}`),
+                                  toolKey,
+                                  Boolean(expandedBlocks[toolKey]),
+                                  () => toggleBlock(toolKey),
                                 );
                               }
                               return null;
@@ -1420,7 +1404,7 @@ const Adventure: React.FC = () => {
                             }
 
                             return part.trim() ? (
-                              <div className="agent-markdown" key={`md-${i}`}>
+                              <div className="agent-markdown" key={getMarkdownPartKey(part)}>
                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                   {part}
                                 </ReactMarkdown>
@@ -1428,13 +1412,14 @@ const Adventure: React.FC = () => {
                             ) : null;
                           });
 
-                          const unrenderedTools = (msg.tools ?? []).map((tool, toolIndex) => {
+                          const unrenderedTools = (msg.tools ?? []).map((tool) => {
                             if (tool.id && renderedToolIds.has(tool.id)) return null;
+                            const toolKey = getToolKey(tool);
                             return renderStoryTool(
                               tool,
-                              `${msg.id}-tool-extra-${toolIndex}`,
-                              Boolean(expandedBlocks[`${msg.id}-tool-extra-${toolIndex}`]),
-                              () => toggleBlock(`${msg.id}-tool-extra-${toolIndex}`),
+                              toolKey,
+                              Boolean(expandedBlocks[toolKey]),
+                              () => toggleBlock(toolKey),
                             );
                           });
 

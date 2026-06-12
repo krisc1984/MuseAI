@@ -52,7 +52,46 @@ pub fn list_dir(path: String) -> Result<Vec<FileNode>, String> {
 
 #[tauri::command]
 pub fn read_file(path: String) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|e| e.to_string())
+    read_text_file(path)
+}
+
+fn read_text_file(path: impl AsRef<Path>) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    decode_text_bytes(&bytes)
+}
+
+fn decode_text_bytes(bytes: &[u8]) -> Result<String, String> {
+    if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        return String::from_utf8(bytes[3..].to_vec()).map_err(|e| e.to_string());
+    }
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        return decode_utf16_bytes(&bytes[2..], true);
+    }
+    if bytes.starts_with(&[0xfe, 0xff]) {
+        return decode_utf16_bytes(&bytes[2..], false);
+    }
+
+    String::from_utf8(bytes.to_vec()).map_err(|e| e.to_string())
+}
+
+fn decode_utf16_bytes(bytes: &[u8], little_endian: bool) -> Result<String, String> {
+    if bytes.len() % 2 != 0 {
+        return Err("UTF-16 文件字节长度不完整".to_string());
+    }
+
+    let code_units = bytes
+        .chunks_exact(2)
+        .map(|chunk| {
+            let pair = [chunk[0], chunk[1]];
+            if little_endian {
+                u16::from_le_bytes(pair)
+            } else {
+                u16::from_be_bytes(pair)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    String::from_utf16(&code_units).map_err(|e| format!("UTF-16 解码失败: {}", e))
 }
 
 #[tauri::command]
@@ -352,6 +391,23 @@ mod tests {
         let next = unique_download_path(&dir, "export.json");
 
         assert_eq!(next.file_name().and_then(|value| value.to_str()), Some("export (1).json"));
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn read_file_decodes_utf16le_with_bom() {
+        let dir = temp_dir("utf16le");
+        let path = dir.join("default.txt");
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in "标题\n正文".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(&path, bytes).expect("write utf16le file");
+
+        assert_eq!(
+            read_file(path.to_string_lossy().into_owned()).unwrap(),
+            "标题\n正文"
+        );
         fs::remove_dir_all(dir).expect("cleanup");
     }
 }

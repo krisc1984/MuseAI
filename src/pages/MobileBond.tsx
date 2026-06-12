@@ -285,7 +285,8 @@ const MobileBond: React.FC = () => {
                       borderRadius: '8px',
                       backgroundColor: isExpanded ? '#fafaf7' : '#fff',
                     }}>
-                      <div
+                      <button
+                        type="button"
                         onClick={() => handleExpandSession(session.id)}
                         style={{
                           padding: '12px 14px',
@@ -293,6 +294,11 @@ const MobileBond: React.FC = () => {
                           justifyContent: 'space-between',
                           alignItems: 'center',
                           cursor: 'pointer',
+                          width: '100%',
+                          border: 'none',
+                          background: 'transparent',
+                          font: 'inherit',
+                          textAlign: 'left',
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
@@ -305,7 +311,7 @@ const MobileBond: React.FC = () => {
                           <span style={{ fontSize: '11px', color: '#bfbfbf' }}>{formatDate(session.savedAt)}</span>
                           <EyeOutlined style={{ fontSize: '12px', color: isExpanded ? '#d97757' : '#bfbfbf' }} />
                         </div>
-                      </div>
+                      </button>
                       {isExpanded && (
                         <div style={{ padding: '0 12px 12px' }}>
                           {loadingRecord && !expandedRecord ? (
@@ -369,7 +375,8 @@ const MobileBond: React.FC = () => {
                       borderRadius: '8px',
                       backgroundColor: isExpanded ? '#fafaf7' : '#fff',
                     }}>
-                      <div
+                      <button
+                        type="button"
                         onClick={() => handleExpandAdventure(session.id)}
                         style={{
                           padding: '12px 14px',
@@ -377,6 +384,11 @@ const MobileBond: React.FC = () => {
                           justifyContent: 'space-between',
                           alignItems: 'center',
                           cursor: 'pointer',
+                          width: '100%',
+                          border: 'none',
+                          background: 'transparent',
+                          font: 'inherit',
+                          textAlign: 'left',
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
@@ -389,7 +401,7 @@ const MobileBond: React.FC = () => {
                           <span style={{ fontSize: '11px', color: '#bfbfbf' }}>{formatDate(session.savedAt)}</span>
                           <EyeOutlined style={{ fontSize: '12px', color: isExpanded ? '#d97757' : '#bfbfbf' }} />
                         </div>
-                      </div>
+                      </button>
                       {isExpanded && (
                         <div style={{ padding: '0 12px 12px' }}>
                           {loadingAdventureRecord && !expandedAdventureRecord ? (

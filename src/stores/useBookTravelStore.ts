@@ -107,6 +107,7 @@ export interface BookTravelSavedProgress {
   id: string;
   title: string;
   savedAt: number;
+  materialId?: string | null;
   sessionKey: string;
   snapshot: BookTravelSnapshot;
 }
@@ -340,6 +341,7 @@ export const useBookTravelStore = create<BookTravelState>()(
           id,
           title: title?.trim() || existing?.title || `穿书进度 ${new Date().toLocaleString('zh-CN')}`,
           savedAt: Date.now(),
+          materialId: state.selectedMaterialId,
           sessionKey,
           snapshot: getBookTravelSnapshot(),
         };

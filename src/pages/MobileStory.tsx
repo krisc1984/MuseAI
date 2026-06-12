@@ -19,6 +19,7 @@ import { usePartnerStore } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { appInvoke, listenStream } from '../utils/runtime';
 import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
+import { createStableContentKey, createStableToolKey } from '../utils/renderKeys';
 import {
   compileStorySystemPrompt,
   buildStoryModelMessages,
@@ -585,12 +586,12 @@ const MobileStory: React.FC = () => {
     });
   };
 
-  const renderToolResult = (tool: AgentToolEntry, index: number, msgId: string) => {
+  const renderToolResult = (tool: AgentToolEntry, toolKey: string) => {
     if (tool.name === 'role_play') {
       if (!tool.result.trim()) return null;
       const characterName = getRolePlayCharacterName(tool.arguments);
       return (
-        <div key={index} style={{
+        <div key={toolKey} style={{
           width: '100%',
           border: '1px solid rgba(217, 119, 87, 0.15)',
           borderRadius: '12px',
@@ -610,17 +611,18 @@ const MobileStory: React.FC = () => {
       );
     }
 
-    const isExpanded = !!expandedBlocks[`${msgId}-tool-${tool.id || index}`];
+    const isExpanded = !!expandedBlocks[toolKey];
     return (
-      <div key={index} style={{
+      <div key={toolKey} style={{
         border: '1px solid #eae6df',
         borderRadius: '8px',
         padding: '8px 12px',
         margin: '8px 0',
         backgroundColor: '#f6f5f0',
       }}>
-        <div
-          onClick={() => toggleBlock(`${msgId}-tool-${tool.id || index}`)}
+        <button
+          type="button"
+          onClick={() => toggleBlock(toolKey)}
           style={{
             fontSize: '12px',
             color: '#8c8880',
@@ -629,11 +631,17 @@ const MobileStory: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
+            border: 'none',
+            background: 'transparent',
+            padding: 0,
+            font: 'inherit',
+            width: '100%',
+            textAlign: 'left',
           }}
         >
           <InfoCircleOutlined />
           <span>系统工具调用：{tool.name} (点击{isExpanded ? '折叠' : '展开'})</span>
-        </div>
+        </button>
         {isExpanded && (
           <pre style={{
             fontSize: '11px',
@@ -850,13 +858,15 @@ const MobileStory: React.FC = () => {
                         /* Parse thinking and tools */
                         (() => {
                           const parts = msg.content.split(/(\[\[TOOL:[^\]]+\]\])/);
-                          return parts.map((part, partIdx) => {
+                          const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
+                          const getToolKey = createStableToolKey(`${msg.id}-tool`);
+                          return parts.map((part) => {
                             const match = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
                             if (match) {
                               const toolId = match[1];
                               const tool = msg.tools?.find(t => t.id === toolId);
                               if (tool) {
-                                return renderToolResult(tool, partIdx, msg.id);
+                                return renderToolResult(tool, getToolKey(tool));
                               }
                               return null;
                             }
@@ -879,7 +889,8 @@ const MobileStory: React.FC = () => {
                                       margin: '8px 0',
                                     }}
                                   >
-                                    <div
+                                    <button
+                                      type="button"
                                       onClick={() => toggleBlock(`${msg.id}-${thinkingId}`)}
                                       style={{
                                         display: 'flex',
@@ -889,11 +900,17 @@ const MobileStory: React.FC = () => {
                                         color: '#d97757',
                                         cursor: 'pointer',
                                         fontWeight: 600,
+                                        border: 'none',
+                                        background: 'transparent',
+                                        padding: 0,
+                                        font: 'inherit',
+                                        width: '100%',
+                                        textAlign: 'left',
                                       }}
                                     >
                                       <BulbOutlined />
                                       <span>冒险思考过程 (点击{isExpanded ? '折叠' : '展开'})</span>
-                                    </div>
+                                    </button>
                                     {isExpanded && (
                                       <div style={{
                                         fontSize: '12px',
@@ -911,7 +928,7 @@ const MobileStory: React.FC = () => {
                             }
 
                             return part.trim() ? (
-                              <ReactMarkdown key={partIdx} remarkPlugins={[remarkGfm]}>
+                              <ReactMarkdown key={getMarkdownPartKey(part)} remarkPlugins={[remarkGfm]}>
                                 {part}
                               </ReactMarkdown>
                             ) : null;

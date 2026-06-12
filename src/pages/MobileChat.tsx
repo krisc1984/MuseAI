@@ -18,6 +18,7 @@ import { usePartnerStore } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { appInvoke, listenStream } from '../utils/runtime';
 import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
+import { createStableContentKey } from '../utils/renderKeys';
 import type { Message, AgentSessionSummary } from '../stores/useAgentStore';
 
 const MobileChat: React.FC = () => {
@@ -520,7 +521,8 @@ const MobileChat: React.FC = () => {
               overflowY: 'auto',
             }}>
               {characterCards.map((card) => (
-                <div
+                <button
+                  type="button"
                   key={card.id}
                   onClick={() => {
                     setSelectedCharacterCardId(card.id);
@@ -534,10 +536,12 @@ const MobileChat: React.FC = () => {
                     border: '1px solid rgba(217, 119, 87, 0.05)',
                     textAlign: 'center',
                     fontWeight: 500,
+                    width: '100%',
+                    font: 'inherit',
                   }}
                 >
                   {card.name}
-                </div>
+                </button>
               ))}
               {characterCards.length === 0 && (
                 <div style={{ color: '#8c8880', fontSize: '13px', textAlign: 'center' }}>
@@ -627,7 +631,8 @@ const MobileChat: React.FC = () => {
                         /* Parse Thinking and Text */
                         (() => {
                           const parts = msg.content.split(/(\[\[THINKING:[^\]]+\]\])/g);
-                          return parts.map((part, idx) => {
+                          const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
+                          return parts.map((part) => {
                             const thinkingMatch = part.match(/\[\[THINKING:([^\]]+)\]\]/);
                             if (thinkingMatch) {
                               const thinkingId = thinkingMatch[1];
@@ -645,7 +650,8 @@ const MobileChat: React.FC = () => {
                                       margin: '8px 0',
                                     }}
                                   >
-                                    <div
+                                    <button
+                                      type="button"
                                       onClick={() => toggleBlock(`${msg.id}-${thinkingId}`)}
                                       style={{
                                         display: 'flex',
@@ -655,11 +661,17 @@ const MobileChat: React.FC = () => {
                                         color: '#d97757',
                                         cursor: 'pointer',
                                         fontWeight: 600,
+                                        border: 'none',
+                                        background: 'transparent',
+                                        padding: 0,
+                                        font: 'inherit',
+                                        width: '100%',
+                                        textAlign: 'left',
                                       }}
                                     >
                                       <BulbOutlined />
                                       <span>思考过程 (点击{isExpanded ? '折叠' : '展开'})</span>
-                                    </div>
+                                    </button>
                                     {isExpanded && (
                                       <div style={{
                                         fontSize: '12px',
@@ -676,7 +688,7 @@ const MobileChat: React.FC = () => {
                               return null;
                             }
                             return part.trim() ? (
-                              <ReactMarkdown key={idx} remarkPlugins={[remarkGfm]}>
+                              <ReactMarkdown key={getMarkdownPartKey(part)} remarkPlugins={[remarkGfm]}>
                                 {part}
                               </ReactMarkdown>
                             ) : null;

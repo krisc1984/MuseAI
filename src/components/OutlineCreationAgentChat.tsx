@@ -18,6 +18,7 @@ import {
   SessionContextCompaction,
 } from '../stores/useAgentStore';
 import { useOutlineStore } from '../stores/useOutlineStore';
+import { createStableContentKey, createStableToolKey } from '../utils/renderKeys';
 
 interface ChatStreamEvent {
   runId: string;
@@ -935,6 +936,8 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
               {(() => {
                 const parts = msg.content ? msg.content.split(/(\[\[(?:TOOL|THINKING):[^\]]+\]\])/) : [msg.role === 'agent' && isStreaming ? ' ' : ''];
                 const renderedToolIds = new Set<string>();
+                const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
+                const getToolKey = createStableToolKey(`${msg.id}-tool`);
                 
                 const renderedParts = parts.map((part, i) => {
                   const toolMatch = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
@@ -943,16 +946,17 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
                     const toolIndex = msg.tools?.findIndex(t => t.id === toolId);
                     if (toolIndex !== undefined && toolIndex >= 0) {
                       const tool = msg.tools![toolIndex];
+                      const toolKey = getToolKey(tool);
                       renderedToolIds.add(toolId);
                       return (
                         <FoldBlock
                           icon={<ToolOutlined />}
                           variant="tool"
-                          key={`tool-${tool.id || i}`}
+                          key={toolKey}
                           title={`工具：${tool.name}`}
                           preview={tool.result}
-                          expanded={Boolean(expandedBlocks[`${msg.id}-tool-${toolIndex}`])}
-                          onToggle={() => toggleBlock(`${msg.id}-tool-${toolIndex}`)}
+                          expanded={Boolean(expandedBlocks[toolKey])}
+                          onToggle={() => toggleBlock(toolKey)}
                         />
                       );
                     }
@@ -982,7 +986,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
                   let displayPart = part;
 
                   return part.trim() ? (
-                    <div className="agent-markdown" key={`md-${i}`}>
+                    <div className="agent-markdown" key={getMarkdownPartKey(displayPart)}>
                       {i === 0 && msg.articleType && msg.articleType !== '默认' && (
                         <div style={{ marginBottom: 8 }}>
                           <Tag style={{ border: 'none', background: msg.role === 'user' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(217, 119, 87, 0.1)', color: msg.role === 'user' ? '#fff' : '#d97757', fontWeight: 500 }}>
@@ -997,17 +1001,18 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
                   ) : null;
                 });
                 
-                const unrenderedTools = msg.tools?.map((tool, index) => {
+                const unrenderedTools = msg.tools?.map((tool) => {
                   if (tool.id && renderedToolIds.has(tool.id)) return null;
+                  const toolKey = getToolKey(tool);
                   return (
                     <FoldBlock
                       icon={<ToolOutlined />}
                       variant="tool"
-                      key={`unrendered-tool-${index}`}
+                      key={toolKey}
                       title={`工具：${tool.name}`}
                       preview={tool.result}
-                      expanded={Boolean(expandedBlocks[`${msg.id}-tool-${index}`])}
-                      onToggle={() => toggleBlock(`${msg.id}-tool-${index}`)}
+                      expanded={Boolean(expandedBlocks[toolKey])}
+                      onToggle={() => toggleBlock(toolKey)}
                     />
                   );
                 });

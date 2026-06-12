@@ -178,20 +178,19 @@ const Background: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    if (isAiModalOpen) {
-      loadWorkspaceFiles();
-      setSelectedFilePaths([]);
-      setExtractionMode('world_book_and_character_cards');
-      setExtractionStep('setup');
-      setManualCharacterNames('');
-      setReviewWorldBookName('');
-      setReviewWorldBookFieldsJson('');
-      setReviewCharacterNames('');
-      setCharacterStatuses([]);
-      generatedWorldBookIdRef.current = null;
-    }
-  }, [isAiModalOpen]);
+  const handleOpenAiModal = () => {
+    void loadWorkspaceFiles();
+    setSelectedFilePaths([]);
+    setExtractionMode('world_book_and_character_cards');
+    setExtractionStep('setup');
+    setManualCharacterNames('');
+    setReviewWorldBookName('');
+    setReviewWorldBookFieldsJson('');
+    setReviewCharacterNames('');
+    setCharacterStatuses([]);
+    generatedWorldBookIdRef.current = null;
+    setIsAiModalOpen(true);
+  };
 
   const readSelectedReferenceText = async () => {
     const selectedFileOnlyPaths = selectedFilePaths.filter(path => flatFilesRef.current.includes(path));
@@ -1793,7 +1792,7 @@ const Background: React.FC = () => {
             type="text"
             size="small"
             icon={<RobotOutlined style={{ color: '#d97757' }} />}
-            onClick={() => setIsAiModalOpen(true)}
+            onClick={handleOpenAiModal}
             style={{
               fontSize: '12px',
               color: '#d97757',

@@ -326,4 +326,126 @@ describe('Story dynamic role loading page', () => {
     expect(screen.queryByText('正在执行工具')).not.toBeInTheDocument();
     expect(screen.queryByText('角色暂未回应。')).not.toBeInTheDocument();
   });
+
+  it('opens Adventure history in a modal with metadata, filters, loading, and deletion', async () => {
+    const companionCard = {
+      id: 'cc-companion',
+      name: '同行者',
+      type: 'character_card' as const,
+      content: '# 角色卡：同行者',
+      fields: {},
+      worldBookId: worldBook.id,
+    };
+    const watcherCard = {
+      id: 'cc-watcher',
+      name: '观察者',
+      type: 'character_card' as const,
+      content: '# 角色卡：观察者',
+      fields: {},
+      worldBookId: worldBook.id,
+    };
+    const extraCard = {
+      id: 'cc-extra',
+      name: '第四人',
+      type: 'character_card' as const,
+      content: '# 角色卡：第四人',
+      fields: {},
+      worldBookId: worldBook.id,
+    };
+    const secondWorldBook = {
+      id: 'wb-harbor',
+      name: '海港世界',
+      type: 'world_book' as const,
+      content: '# 海港世界',
+      fields: {},
+    };
+    const harborCard = {
+      id: 'cc-harbor',
+      name: '渡鸦',
+      type: 'character_card' as const,
+      content: '# 角色卡：渡鸦',
+      fields: {},
+      worldBookId: secondWorldBook.id,
+    };
+    usePartnerStore.setState({
+      worldBooks: [worldBook, secondWorldBook],
+      characterCards: [characterCard, companionCard, watcherCard, extraCard, harborCard],
+      selectedId: null,
+      selectedType: null,
+    });
+    invokeMock.mockImplementation(async (command: string, args?: any): Promise<any> => {
+      if (command === 'list_agent_sessions') {
+        return [
+          {
+            id: 'story-session-forest',
+            title: '森林开局',
+            savedAt: 1717951140000,
+            selectedWorldBookId: worldBook.id,
+            characterCardIds: [characterCard.id, companionCard.id, watcherCard.id, extraCard.id],
+          },
+          {
+            id: 'story-session-harbor',
+            title: '港口追踪',
+            savedAt: 1717864800000,
+            selectedWorldBookId: secondWorldBook.id,
+            characterCardIds: [harborCard.id],
+          },
+        ];
+      }
+      if (command === 'load_agent_session') {
+        return {
+          id: args.id,
+          title: '森林开局',
+          savedAt: 1717951140000,
+          messages: [{ id: 'm1', role: 'user', content: '进入森林', tools: [] }],
+          selectedReferenceFiles: [],
+          selectedOutlineFile: null,
+          todos: [],
+          isArchived: true,
+          selectedWorldBookId: worldBook.id,
+          characterCardIds: [characterCard.id],
+          dynamicRoleLoadingEnabled: true,
+        };
+      }
+      if (command === 'delete_agent_session') return null;
+      return undefined;
+    });
+
+    render(<Adventure />);
+    fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
+
+    expect(await screen.findByText('历史冒险')).toBeInTheDocument();
+    let dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('森林开局')).toBeInTheDocument();
+    expect(within(dialog).getByText(/测试世界/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/陆雪莹/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/同行者/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/观察者/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/第四人/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '打开森林开局' }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('load_agent_session', { id: 'story-session-forest' });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
+    expect(await screen.findByText('历史冒险')).toBeInTheDocument();
+    dialog = screen.getByRole('dialog');
+
+    fireEvent.mouseDown(screen.getByLabelText('按世界书筛选'));
+    const worldBookOptions = await screen.findAllByText('海港世界');
+    fireEvent.click(worldBookOptions[worldBookOptions.length - 1]);
+    expect(within(dialog).queryByText('森林开局')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('港口追踪')).toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByLabelText('按角色卡筛选'));
+    const characterOptions = await screen.findAllByText('渡鸦');
+    fireEvent.click(characterOptions[characterOptions.length - 1]);
+    expect(within(dialog).getByText('港口追踪')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '删除港口追踪' }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('delete_agent_session', { id: 'story-session-harbor' });
+    });
+  });
 });

@@ -36,7 +36,8 @@ const MobileHome: React.FC = () => {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {/* Chat Entry */}
-        <div
+        <button
+          type="button"
           onClick={() => navigate('/chat')}
           style={{
             backgroundColor: '#fff',
@@ -48,6 +49,9 @@ const MobileHome: React.FC = () => {
             boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
             border: '1px solid rgba(217, 119, 87, 0.05)',
             transition: 'transform 0.2s',
+            width: '100%',
+            font: 'inherit',
+            textAlign: 'left',
           }}
         >
           <div style={{
@@ -66,10 +70,11 @@ const MobileHome: React.FC = () => {
             <h4 style={{ margin: '0 0 4px 0', fontSize: '15px', fontWeight: 600, color: '#33312e' }}>伴侣聊天</h4>
             <p style={{ margin: 0, fontSize: '12px', color: '#8c8880' }}>与您的智能伴侣即时对话，同步生成羁绊记忆。</p>
           </div>
-        </div>
+        </button>
 
         {/* Story Entry */}
-        <div
+        <button
+          type="button"
           onClick={() => navigate('/story')}
           style={{
             backgroundColor: '#fff',
@@ -81,6 +86,9 @@ const MobileHome: React.FC = () => {
             boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
             border: '1px solid rgba(217, 119, 87, 0.05)',
             transition: 'transform 0.2s',
+            width: '100%',
+            font: 'inherit',
+            textAlign: 'left',
           }}
         >
           <div style={{
@@ -99,10 +107,11 @@ const MobileHome: React.FC = () => {
             <h4 style={{ margin: '0 0 4px 0', fontSize: '15px', fontWeight: 600, color: '#33312e' }}>故事冒险</h4>
             <p style={{ margin: 0, fontSize: '12px', color: '#8c8880' }}>开启沉浸式文字冒险游戏，由大模型为您主持剧情。</p>
           </div>
-        </div>
+        </button>
 
         {/* Bond Entry */}
-        <div
+        <button
+          type="button"
           onClick={() => navigate('/bond')}
           style={{
             backgroundColor: '#fff',
@@ -114,6 +123,9 @@ const MobileHome: React.FC = () => {
             boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
             border: '1px solid rgba(217, 119, 87, 0.05)',
             transition: 'transform 0.2s',
+            width: '100%',
+            font: 'inherit',
+            textAlign: 'left',
           }}
         >
           <div style={{
@@ -132,7 +144,7 @@ const MobileHome: React.FC = () => {
             <h4 style={{ margin: '0 0 4px 0', fontSize: '15px', fontWeight: 600, color: '#33312e' }}>智能羁绊</h4>
             <p style={{ margin: 0, fontSize: '12px', color: '#8c8880' }}>查看和编辑您的角色卡、关系类型以及关键记忆。</p>
           </div>
-        </div>
+        </button>
       </div>
     </div>
   );

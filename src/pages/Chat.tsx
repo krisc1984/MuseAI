@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin } from 'antd';
+import { Button, Tooltip, Tag, Input, message, Modal, Spin } from 'antd';
 import {
   BulbOutlined,
   HistoryOutlined,
@@ -9,7 +9,6 @@ import {
   SettingOutlined,
   PlayCircleOutlined,
   InfoCircleOutlined,
-  DeleteOutlined,
   UserOutlined,
   BookOutlined,
   FileProtectOutlined,
@@ -27,7 +26,9 @@ import { usePartnerStore } from '../stores/usePartnerStore';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction } from '../stores/useAgentStore';
 import { PartnerChatSettingsModal } from '../components/PartnerChatSettingsModal';
+import { SessionHistoryModal } from '../components/SessionHistoryModal';
 import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
+import { createStableContentKey } from '../utils/renderKeys';
 
 interface ChatStreamEvent {
   runId: string;
@@ -142,6 +143,7 @@ const Chat: React.FC = () => {
     isStreaming, setIsStreaming,
     expandedBlocks, setExpandedBlocks,
     selectedWorldBookId, selectedCharacterCardId,
+    setSelectedWorldBookId, setSelectedCharacterCardId,
     userInfo,
     sessions, setSessions,
     sessionId, setSessionId,
@@ -163,10 +165,12 @@ const Chat: React.FC = () => {
   const sessionIdRef = useRef(sessionId);
   const sessionTitleRef = useRef(sessionTitle);
   const isSessionArchivedRef = useRef(isSessionArchived);
+  const selectedWorldBookIdRef = useRef(selectedWorldBookId);
   const selectedCharacterCardIdRef = useRef(selectedCharacterCardId);
   const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSavingConversation, setIsSavingConversation] = useState(false);
@@ -186,6 +190,7 @@ const Chat: React.FC = () => {
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
   useEffect(() => { isSessionArchivedRef.current = isSessionArchived; }, [isSessionArchived]);
+  useEffect(() => { selectedWorldBookIdRef.current = selectedWorldBookId; }, [selectedWorldBookId]);
   useEffect(() => { selectedCharacterCardIdRef.current = selectedCharacterCardId; }, [selectedCharacterCardId]);
   useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
 
@@ -578,7 +583,8 @@ const Chat: React.FC = () => {
           todos: [],
           contextCompaction: contextCompactionRef.current,
           isArchived: isSessionArchivedRef.current,
-          characterCardId: selectedCharacterCardIdRef.current
+          characterCardId: selectedCharacterCardIdRef.current,
+          selectedWorldBookId: selectedWorldBookIdRef.current
         }
       });
       await refreshSessions();
@@ -629,6 +635,8 @@ const Chat: React.FC = () => {
       setSessionId(session.id);
       setSessionTitle(session.title);
       setMessages(session.messages);
+      setSelectedWorldBookId(session.selectedWorldBookId ?? null);
+      setSelectedCharacterCardId(session.characterCardId ?? null);
       contextCompactionRef.current = session.contextCompaction ?? null;
       setContextCompaction(session.contextCompaction ?? null);
       setIsStreaming(false);
@@ -971,46 +979,31 @@ const Chat: React.FC = () => {
             <Button type="text" icon={<ReloadOutlined />} onClick={createNewSession} />
           </Tooltip>
 
-          <Dropdown
-            menu={{
-              items: sessions.length > 0
-                ? sessions.map((session) => ({
-                  key: session.id,
-                  label: (
-                    <div className="agent-session-menu-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 200, padding: '4px 0' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
-                        <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{session.title}</strong>
-                        <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>
-                          {session.savedAt ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(session.savedAt)) : '未保存'}
-                        </span>
-                      </div>
-                      <Button
-                        type="text"
-                        danger
-                        size="small"
-                        icon={<DeleteOutlined />}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDeleteSession(session.id);
-                        }}
-                      />
-                    </div>
-                  ),
-                }))
-                : [{ key: 'empty', disabled: true, label: '暂无历史聊天' }],
-              onClick: ({ key }) => {
-                if (key !== 'empty') void openSession(String(key));
-              },
-            }}
-            placement="bottomRight"
-            trigger={['click']}
-          >
-            <Tooltip title="历史记录">
-              <Button type="text" icon={<HistoryOutlined />} onClick={() => void refreshSessions()} />
-            </Tooltip>
-          </Dropdown>
+          <Tooltip title="历史记录">
+            <Button
+              aria-label="历史记录"
+              type="text"
+              icon={<HistoryOutlined />}
+              onClick={() => {
+                void refreshSessions();
+                setIsHistoryOpen(true);
+              }}
+            />
+          </Tooltip>
         </div>
       </div>
+
+      <SessionHistoryModal
+        open={isHistoryOpen}
+        title="历史聊天"
+        emptyText="暂无历史聊天"
+        sessions={sessions}
+        worldBooks={worldBooks}
+        characterCards={characterCards}
+        onClose={() => setIsHistoryOpen(false)}
+        onOpenSession={openSession}
+        onDeleteSession={handleDeleteSession}
+      />
 
       {/* Main chat layout */}
       {hasMessages ? (
@@ -1100,8 +1093,9 @@ const Chat: React.FC = () => {
 
                         {(() => {
                           const parts = msg.content ? msg.content.split(/(\[\[(?:THINKING):[^\]]+\]\])/) : [''];
+                          const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
 
-                          return parts.map((part, i) => {
+                          return parts.map((part) => {
                             const thinkingMatch = part.match(/^\[\[THINKING:([^\]]+)\]\]$/);
                             if (thinkingMatch) {
                               const thinkingId = thinkingMatch[1];
@@ -1123,7 +1117,7 @@ const Chat: React.FC = () => {
                             }
 
                             return part.trim() ? (
-                              <div className="agent-markdown" key={`md-${i}`}>
+                              <div className="agent-markdown" key={getMarkdownPartKey(part)}>
                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                   {part}
                                 </ReactMarkdown>

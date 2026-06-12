@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio } from 'antd';
+import { Button, Tooltip, Tag, Input, message, Modal, Spin, Select, Radio, Empty } from 'antd';
 import {
   HistoryOutlined,
   ReloadOutlined,
@@ -30,6 +30,7 @@ import {
   compileStorySystemPrompt,
   getStoryAllowedTools,
 } from './storyAgent';
+import { resolveBookTravelProgressMaterial } from '../utils/sessionHistory';
 
 interface ChatStreamEvent {
   runId: string;
@@ -354,6 +355,8 @@ const Story: React.FC = () => {
 
   const bookTravelStore = useBookTravelStore();
   const navigate = useNavigate();
+  const [isBookTravelHistoryOpen, setIsBookTravelHistoryOpen] = useState(false);
+  const [bookTravelMaterialFilter, setBookTravelMaterialFilter] = useState<string | null>(null);
 
   // Book-travel stream states
   const [, setIsTransitioningScene] = useState(false);
@@ -643,6 +646,13 @@ const Story: React.FC = () => {
   );
   const currentBookTravelScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
   const currentBookTravelSceneTitle = currentBookTravelScene?.title?.trim();
+  const savedProgressRows = bookTravelStore.savedProgresses.map((progress) => ({
+    progress,
+    material: resolveBookTravelProgressMaterial(progress, bookTravelStore.assembledMaterials),
+  }));
+  const filteredSavedProgressRows = bookTravelMaterialFilter
+    ? savedProgressRows.filter((row) => row.material?.id === bookTravelMaterialFilter)
+    : savedProgressRows;
 
   const restartBookTravelAdventure = () => {
     void cancelBookTravelStream().catch((error) => {
@@ -1463,6 +1473,7 @@ const Story: React.FC = () => {
           {bookTravelStore.scenes.length > 0 && (
             <Tooltip title="保存当前穿书进度">
               <Button
+                aria-label="保存进度"
                 type="text"
                 disabled={isStreaming}
                 icon={<FileProtectOutlined />}
@@ -1488,46 +1499,96 @@ const Story: React.FC = () => {
             <Button aria-label="重开新冒险" type="text" icon={<ReloadOutlined />} onClick={restartBookTravelAdventure} />
           </Tooltip>
 
-          <Dropdown
-            menu={{
-              items: bookTravelStore.savedProgresses.length > 0
-                ? bookTravelStore.savedProgresses.map((progress) => ({
-                  key: progress.id,
-                  label: (
-                    <div className="agent-session-menu-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 200, padding: '4px 0' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
-                        <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{progress.title}</strong>
-                        <span style={{ fontSize: '12px', color: '#999', marginTop: 2 }}>
-                          {savedProgressDateFormatter.format(new Date(progress.savedAt))}
-                        </span>
-                      </div>
-                      <Button
-                        type="text"
-                        danger
-                        size="small"
-                        icon={<DeleteOutlined />}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          bookTravelStore.deleteSavedProgress(progress.id);
-                        }}
-                      />
-                    </div>
-                  ),
-                }))
-                : [{ key: 'empty', disabled: true, label: '暂无保存的穿书进度' }],
-              onClick: ({ key }) => {
-                if (key !== 'empty') bookTravelStore.loadSavedProgress(String(key));
-              },
-            }}
-            placement="bottomRight"
-            trigger={['click']}
-          >
-            <Tooltip title="穿书保存进度">
-              <Button type="text" icon={<HistoryOutlined />} />
-            </Tooltip>
-          </Dropdown>
+          <Tooltip title="穿书保存进度">
+            <Button
+              aria-label="穿书保存进度"
+              type="text"
+              icon={<HistoryOutlined />}
+              onClick={() => setIsBookTravelHistoryOpen(true)}
+            />
+          </Tooltip>
         </div>
       </div>
+
+      <Modal
+        open={isBookTravelHistoryOpen}
+        title="穿书进度"
+        footer={null}
+        centered
+        width={720}
+        onCancel={() => setIsBookTravelHistoryOpen(false)}
+      >
+        <Select
+          aria-label="按穿书素材筛选"
+          allowClear
+          placeholder="按穿书素材筛选"
+          value={bookTravelMaterialFilter}
+          onChange={(value) => setBookTravelMaterialFilter(value ?? null)}
+          options={bookTravelStore.assembledMaterials.map((material) => ({ value: material.id, label: material.title }))}
+          style={{ width: '100%', marginBottom: 16 }}
+        />
+        {filteredSavedProgressRows.length === 0 ? (
+          <Empty description={bookTravelMaterialFilter ? '没有符合筛选的穿书进度' : '暂无保存的穿书进度'} />
+        ) : (
+          <div style={{ maxHeight: 460, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filteredSavedProgressRows.map(({ progress, material }) => (
+              <div
+                key={progress.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'stretch',
+                  gap: 8,
+                  border: '1px solid #eee8df',
+                  borderRadius: 8,
+                  background: '#fffdfa',
+                }}
+              >
+                <button
+                  type="button"
+                  aria-label={`打开${progress.title}`}
+                  onClick={() => {
+                    bookTravelStore.loadSavedProgress(progress.id);
+                    setIsBookTravelHistoryOpen(false);
+                  }}
+                  style={{
+                    flex: 1,
+                    border: 0,
+                    background: 'transparent',
+                    textAlign: 'left',
+                    padding: '12px 14px',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    minWidth: 0,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+                    <strong style={{ color: '#33312e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {progress.title}
+                    </strong>
+                    <span style={{ color: '#9a948c', fontSize: 12, flexShrink: 0 }}>
+                      {savedProgressDateFormatter.format(new Date(progress.savedAt))}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                    <Tag color={material ? 'orange' : 'default'}>
+                      穿书素材：{material?.title || '未匹配穿书素材'}
+                    </Tag>
+                  </div>
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', paddingRight: 8 }}>
+                  <Button
+                    type="text"
+                    danger
+                    aria-label={`删除${progress.title}`}
+                    icon={<DeleteOutlined />}
+                    onClick={() => bookTravelStore.deleteSavedProgress(progress.id)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
 
       {/* Unified scrollable content area */}
       <div ref={chatHistoryRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -1722,7 +1783,8 @@ const Story: React.FC = () => {
                     {bookTravelStore.entryPoints.map((ep) => {
                       const selected = bookTravelStore.selectedEntryPointId === ep.id;
                       return (
-                        <div
+                        <button
+                          type="button"
                           key={ep.id}
                           onClick={() => bookTravelStore.setSelectedEntryPointId(ep.id)}
                           style={{
@@ -1731,12 +1793,15 @@ const Story: React.FC = () => {
                             border: selected ? '1px solid #d97757' : '1px solid #eae6df',
                             background: selected ? '#fff7f2' : '#ffffff',
                             cursor: 'pointer',
+                            width: '100%',
+                            font: 'inherit',
+                            textAlign: 'left',
                           }}
                         >
                           <div style={{ fontWeight: 600, color: selected ? '#d97757' : '#33312e', fontSize: 14 }}>{ep.title}</div>
                           <div style={{ fontSize: 12, color: '#8c8882', marginTop: 4 }}>{ep.summary}</div>
                           {ep.risk && <div style={{ fontSize: 12, color: '#ff4d4f', marginTop: 4 }}>风险：{ep.risk}</div>}
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
