@@ -1295,7 +1295,7 @@ const useStoryView = () => {
         };
         const classifierRequest = buildBookTravelRequest(
           'input-classifier',
-          '你是一个穿书行动分类器。根据用户输入判断其会影响当前场景内的局部互动，还是需要切换到新场景。\n- insert-beat: 在当前场景中继续互动，例如对话、观察、小动作、短暂试探。\n- change-scene: 切换场景，例如离开地点、跳过时间、做出重大决定、触发新事件。\n只输出严格 JSON，classification 只能是 insert-beat 或 change-scene，不要解释。',
+          '你是一个穿书行动分类器。根据用户输入判断其会影响当前场景内的局部互动，还是需要切换到新场景。\n- insert-beat: 在当前场景中继续互动，例如对话、观察、小动作、短暂试探。\n- change-scene: 切换场景，例如离开地点、跳过时间、做出重大决定、触发新事件。\n只输出严格 JSON，classification 只能是 insert-beat 或 change-scene，不要解释。\n正确回复样例：{"classification":"insert-beat"}',
           { ...classifierConfig, temperature: 0 },
           materials,
           classifierState,

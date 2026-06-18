@@ -1938,6 +1938,21 @@ pub async fn test_llm_connection(request: TestConnectionRequest) -> Result<Strin
                 return Err(format!("接口请求失败 (Status {}): {}", status, body_text));
             }
 
+            let body = response.bytes().await.map_err(|error| {
+                format_response_read_error("读取 Anthropic 兼容响应失败", &error)
+            })?;
+            let value: Value = serde_json::from_slice(&body)
+                .map_err(|error| format!("Anthropic 兼容接口返回了无效响应：{}", error))?;
+            let valid_message = value.get("type").and_then(Value::as_str) == Some("message")
+                && value
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .map(|content| !content.is_empty())
+                    .unwrap_or(false);
+            if !valid_message {
+                return Err(String::from("Anthropic 兼容接口返回了无效响应"));
+            }
+
             Ok("连接成功".to_string())
         }
         _ => {
@@ -1946,7 +1961,7 @@ pub async fn test_llm_connection(request: TestConnectionRequest) -> Result<Strin
             let body = json!({
                 "model": request.model,
                 "messages": messages,
-                "stream": false,
+                "stream": true,
                 "max_tokens": max_tokens,
             });
 
@@ -1962,6 +1977,24 @@ pub async fn test_llm_connection(request: TestConnectionRequest) -> Result<Strin
                 let status = response.status();
                 let body_text = response.text().await.unwrap_or_default();
                 return Err(format!("接口请求失败 (Status {}): {}", status, body_text));
+            }
+
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+            let mut received_valid_event = false;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|error| {
+                    format_response_read_error("读取 OpenAI 兼容流式响应失败", &error)
+                })?;
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                process_sse_buffer(&mut buffer, |data| {
+                    if data == "[DONE]" || parse_openai_stream_event(data).is_some() {
+                        received_valid_event = true;
+                    }
+                });
+            }
+            if !received_valid_event {
+                return Err(String::from("OpenAI 兼容接口返回了无效流式响应"));
             }
 
             Ok("连接成功".to_string())
@@ -3238,12 +3271,80 @@ mod tests {
         short_reverse_outline_prompt, ReverseOutlineSegment, ReverseOutlineSourceDoc,
         ReverseOutlineSummaryBatch,
     };
-    use crate::models::AnalyzeMemoryRequest;
+    use crate::models::{AnalyzeMemoryRequest, TestConnectionRequest};
     use serde_json::Value;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
     use std::time::SystemTime;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn spawn_connection_test_server(
+        response: Vec<u8>,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let address = listener.local_addr().expect("test address should exist");
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("request should connect");
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("request should be readable");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+            socket
+                .write_all(&response)
+                .await
+                .expect("response should be written");
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (format!("http://{}", address), handle)
+    }
+
+    fn complete_http_response(content_type: &str, body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            content_type,
+            body.len(),
+            body
+        )
+        .into_bytes()
+    }
+
+    fn connection_request(model_interface: &str, base_url: String) -> TestConnectionRequest {
+        TestConnectionRequest {
+            model_interface: model_interface.to_string(),
+            base_url,
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+        }
+    }
 
     fn temp_museai_dir(name: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -3271,6 +3372,93 @@ mod tests {
         assert_eq!(entry["message"], "模型请求失败");
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn test_llm_connection_reads_valid_openai_stream() {
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\ndata: [DONE]\n\n";
+        let (base_url, request_handle) =
+            spawn_connection_test_server(complete_http_response("text/event-stream", body)).await;
+
+        let result =
+            super::test_llm_connection(connection_request("OpenAI-compatible", base_url)).await;
+        let raw_request = request_handle.await.expect("server task should finish");
+        let request_body = raw_request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .expect("request body should exist");
+        let json: Value = serde_json::from_str(request_body).expect("request should contain json");
+
+        assert_eq!(result.as_deref(), Ok("连接成功"));
+        assert_eq!(json["stream"], true);
+        assert_eq!(json["max_tokens"], 5);
+        assert!(json.get("tools").is_none());
+        assert!(json.get("tool_choice").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_llm_connection_rejects_openai_stream_that_breaks_after_200() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 200\r\nConnection: close\r\n\r\ndata: {\"choices\":".to_vec();
+        let (base_url, request_handle) = spawn_connection_test_server(response).await;
+
+        let error = super::test_llm_connection(connection_request("OpenAI-compatible", base_url))
+            .await
+            .expect_err("truncated stream should fail");
+        request_handle.await.expect("server task should finish");
+
+        assert!(error.contains("读取 OpenAI 兼容流式响应失败"));
+        assert!(error.contains("error decoding response body"));
+    }
+
+    #[tokio::test]
+    async fn test_llm_connection_reads_valid_anthropic_body() {
+        let body =
+            r#"{"id":"msg_test","type":"message","content":[{"type":"text","text":"pong"}]}"#;
+        let (base_url, request_handle) =
+            spawn_connection_test_server(complete_http_response("application/json", body)).await;
+
+        let result =
+            super::test_llm_connection(connection_request("Anthropic-compatible", base_url)).await;
+        request_handle.await.expect("server task should finish");
+
+        assert_eq!(result.as_deref(), Ok("连接成功"));
+    }
+
+    #[tokio::test]
+    async fn test_llm_connection_rejects_invalid_anthropic_body_after_200() {
+        let (base_url, request_handle) = spawn_connection_test_server(complete_http_response(
+            "application/json",
+            r#"{"type":"message","content":[]}"#,
+        ))
+        .await;
+
+        let error =
+            super::test_llm_connection(connection_request("Anthropic-compatible", base_url))
+                .await
+                .expect_err("invalid Anthropic response should fail");
+        request_handle.await.expect("server task should finish");
+
+        assert!(error.contains("Anthropic 兼容接口返回了无效响应"));
+    }
+
+    #[tokio::test]
+    async fn test_llm_connection_keeps_http_status_and_provider_body() {
+        let body = r#"{"error":{"message":"invalid api key"}}"#;
+        let response = format!(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .into_bytes();
+        let (base_url, request_handle) = spawn_connection_test_server(response).await;
+
+        let error = super::test_llm_connection(connection_request("OpenAI-compatible", base_url))
+            .await
+            .expect_err("HTTP failure should remain visible");
+        request_handle.await.expect("server task should finish");
+
+        assert!(error.contains("401 Unauthorized"));
+        assert!(error.contains("invalid api key"));
     }
 
     #[test]

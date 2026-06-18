@@ -90,7 +90,6 @@ pub enum BookTravelInputClassification {
 #[serde(rename_all = "camelCase")]
 pub struct BookTravelInputClassificationResult {
     pub classification: BookTravelInputClassification,
-    pub reason: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -320,7 +319,7 @@ fn build_user_prompt(
         BookTravelRole::MaterialAssembler => "",
         BookTravelRole::EntryDirector => "",
         BookTravelRole::InputClassifier => {
-            "请输出严格 JSON，字段为 classification 与 reason。classification 只能是 insert-beat 或 change-scene。"
+            "请输出严格 JSON，只包含 classification 字段。classification 只能是 insert-beat 或 change-scene。"
         }
         BookTravelRole::ScenePlanner => {
             "规划前检查世界规则、用户资源、已知信息、当前时间与地点。请输出严格 JSON，字段包含 id、title、summary、currentSituation、time、location、activeCharacters、stateChanges、divergence、storyProgress、endingStatus、sceneGoals、entryBeatGuidance、writerInstructions；stateChanges 不要包含 time 或 location。"
@@ -1289,8 +1288,24 @@ mod tests {
         assert!(classify_call.user_prompt.contains("insert-beat"));
         assert!(classify_call.user_prompt.contains("change-scene"));
         assert!(!classify_call.user_prompt.contains("meta"));
+        assert!(!classify_call.user_prompt.contains("reason"));
         assert_eq!(default_temperature(BookTravelRole::InputClassifier), 0.0);
+    }
 
+    #[test]
+    fn input_classifier_parses_classification_without_reason() {
+        let parsed = parse_book_travel_json::<BookTravelInputClassificationResult>(
+            r#"{"classification":"change-scene"}"#,
+            serde_json::json!({}),
+        )
+        .expect("classification-only JSON should parse");
+
+        assert_eq!(
+            parsed,
+            BookTravelInputClassificationResult {
+                classification: BookTravelInputClassification::ChangeScene,
+            }
+        );
     }
 
     #[test]

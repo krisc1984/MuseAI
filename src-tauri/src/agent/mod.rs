@@ -157,7 +157,8 @@ async fn stream_openai_round(
     let mut buffer = String::new();
     let mut result = OpenAiRoundResult::default();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
+        let chunk = chunk
+            .map_err(|error| format_response_read_error("读取 OpenAI 兼容流式响应失败", &error))?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         process_sse_buffer(&mut buffer, |data| {
             if data == "[DONE]" {
@@ -310,7 +311,9 @@ async fn stream_anthropic_round(
     let mut buffer = String::new();
     let mut result = AnthropicRoundResult::default();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
+        let chunk = chunk.map_err(|error| {
+            format_response_read_error("读取 Anthropic 兼容流式响应失败", &error)
+        })?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         process_sse_buffer(&mut buffer, |data| {
             if let Some(event) = parse_anthropic_stream_event(data) {

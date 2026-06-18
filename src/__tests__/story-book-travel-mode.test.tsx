@@ -28,7 +28,7 @@ function createDeferred<T>() {
 
 const defaultInvoke = async (command: string, args?: any): Promise<any> => {
   if (command === 'list_agent_sessions') return [];
-  if (command === 'classify_book_travel_input') return { classification: 'insert-beat', reason: '当前场景内互动' };
+  if (command === 'classify_book_travel_input') return { classification: 'insert-beat' };
   if (command === 'start_write_book_travel_insert_beat_stream') {
     const runId = 'insert-run';
     setTimeout(() => {
@@ -848,6 +848,8 @@ describe('Story book-travel mode', () => {
     expect(classifyCall?.[1].request.temperature).toBe(0);
     expect(classifyCall?.[1].request.systemPrompt).toContain('insert-beat');
     expect(classifyCall?.[1].request.systemPrompt).toContain('change-scene');
+    expect(classifyCall?.[1].request.systemPrompt).toContain('{"classification":"insert-beat"}');
+    expect(classifyCall?.[1].request.systemPrompt).not.toContain('reason');
     expect(classifyCall?.[1].request.systemPrompt).not.toContain('meta');
   });
 

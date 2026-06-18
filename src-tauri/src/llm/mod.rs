@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::error::Error;
 
 use crate::agent::parse_tool_arguments;
 use crate::models::*;
@@ -676,6 +677,23 @@ pub fn build_anthropic_endpoint(base_url: &str) -> String {
     build_endpoint(base_url, "v1/messages", "messages")
 }
 
+pub fn format_response_read_error(context: &str, error: &(dyn Error + 'static)) -> String {
+    let mut details = Vec::new();
+    let mut current = Some(error);
+    while let Some(item) = current {
+        let message = item.to_string();
+        if !message.is_empty() && !details.contains(&message) {
+            details.push(message);
+        }
+        current = item.source();
+    }
+    if details.is_empty() {
+        context.to_string()
+    } else {
+        format!("{}：{}", context, details.join("；"))
+    }
+}
+
 pub fn anthropic_thinking_config(thinking_depth: Option<&str>, max_tokens: u32) -> Option<Value> {
     let depth = thinking_depth?.trim();
     if depth.is_empty() || depth == "off" || max_tokens <= 1024 {
@@ -837,6 +855,28 @@ pub fn parse_anthropic_stream_event(data: &str) -> Option<AnthropicStreamEvent> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct ChainedTestError {
+        message: &'static str,
+        source: Option<Box<dyn Error + Send + Sync>>,
+    }
+
+    impl fmt::Display for ChainedTestError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(self.message)
+        }
+    }
+
+    impl Error for ChainedTestError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source
+                .as_deref()
+                .map(|source| source as &(dyn Error + 'static))
+        }
+    }
 
     fn msg(id: &str, role: &str, content: &str) -> ChatMessage {
         ChatMessage {
@@ -858,6 +898,27 @@ mod tests {
             tool_calls: None,
             thinking_blocks: None,
         }
+    }
+
+    #[test]
+    fn format_response_read_error_keeps_context_and_unique_source_chain() {
+        let error = ChainedTestError {
+            message: "error decoding response body",
+            source: Some(Box::new(ChainedTestError {
+                message: "error decoding response body",
+                source: Some(Box::new(ChainedTestError {
+                    message: "connection reset by peer",
+                    source: None,
+                })),
+            })),
+        };
+
+        let message = format_response_read_error("读取 OpenAI 兼容流式响应失败", &error);
+
+        assert!(message.starts_with("读取 OpenAI 兼容流式响应失败："));
+        assert!(message.contains("error decoding response body"));
+        assert!(message.contains("connection reset by peer"));
+        assert_eq!(message.matches("error decoding response body").count(), 1);
     }
 
     fn partner_chat_pairs(count: usize) -> Vec<ChatMessage> {

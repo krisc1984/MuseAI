@@ -46,7 +46,7 @@ scratch/
 Thumbs.db
 
 # AI
-.agent/
+.agents/
 .codex/
 .claude/
 .vscode/
