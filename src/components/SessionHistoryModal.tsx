@@ -1,12 +1,19 @@
-import { DeleteOutlined } from '@ant-design/icons';
-import { Button, Empty, Modal, Select, Tag } from 'antd';
+import {
+  CheckOutlined,
+  CloseOutlined,
+  DeleteOutlined,
+  EditOutlined,
+} from '@ant-design/icons';
+import { Button, Empty, Input, message, Modal, Select, Tag } from 'antd';
+import type { InputRef } from 'antd';
 import type { AgentSessionSummary } from '../stores/useAgentStore';
 import type { PartnerItem } from '../stores/usePartnerStore';
 import {
   resolveSessionHistoryMeta,
   sessionMatchesHistoryFilters,
 } from '../utils/sessionHistory';
-import React, { useMemo, useState } from 'react';
+import { useStateGroup } from '../utils/reducerState';
+import React, { useMemo, useRef } from 'react';
 
 interface SessionHistoryModalProps {
   open: boolean;
@@ -18,6 +25,15 @@ interface SessionHistoryModalProps {
   onClose: () => void;
   onOpenSession: (id: string) => void | Promise<void>;
   onDeleteSession: (id: string) => void | Promise<void>;
+  onRenameSession: (id: string, title: string) => void | Promise<void>;
+}
+
+interface SessionHistoryModalState {
+  worldBookFilter: string | null;
+  characterCardFilter: string | null;
+  editingSessionId: string | null;
+  editingTitle: string;
+  isSavingTitle: boolean;
 }
 
 const savedAtFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -57,9 +73,23 @@ export function SessionHistoryModal({
   onClose,
   onOpenSession,
   onDeleteSession,
+  onRenameSession,
 }: SessionHistoryModalProps) {
-  const [worldBookFilter, setWorldBookFilter] = useState<string | null>(null);
-  const [characterCardFilter, setCharacterCardFilter] = useState<string | null>(null);
+  const [uiState, patchUiState, setUiField] = useStateGroup<SessionHistoryModalState>({
+    worldBookFilter: null,
+    characterCardFilter: null,
+    editingSessionId: null,
+    editingTitle: '',
+    isSavingTitle: false,
+  });
+  const {
+    worldBookFilter,
+    characterCardFilter,
+    editingSessionId,
+    editingTitle,
+    isSavingTitle,
+  } = uiState;
+  const titleInputRef = useRef<InputRef>(null);
 
   const filteredSessions = useMemo(
     () => sessions.filter((session) => sessionMatchesHistoryFilters(
@@ -75,12 +105,53 @@ export function SessionHistoryModal({
     void Promise.resolve(onOpenSession(id)).then(onClose);
   };
 
+  const startEditing = (session: AgentSessionSummary) => {
+    patchUiState({
+      editingSessionId: session.id,
+      editingTitle: session.title,
+    });
+    window.setTimeout(() => titleInputRef.current?.focus({ cursor: 'all' }), 0);
+  };
+
+  const cancelEditing = () => {
+    patchUiState({
+      editingSessionId: null,
+      editingTitle: '',
+    });
+  };
+
+  const handleClose = () => {
+    cancelEditing();
+    onClose();
+  };
+
+  const saveTitle = async () => {
+    if (!editingSessionId || isSavingTitle) return;
+    const title = editingTitle.trim();
+    if (!title) {
+      message.warning('会话名称不能为空');
+      return;
+    }
+
+    setUiField('isSavingTitle', true);
+    try {
+      await onRenameSession(editingSessionId, title);
+      message.success('会话名称已修改');
+      cancelEditing();
+    } catch (error) {
+      console.error('修改会话名称失败:', error);
+      message.error('修改会话名称失败');
+    } finally {
+      setUiField('isSavingTitle', false);
+    }
+  };
+
   return (
     <Modal
       open={open}
       title={title}
       footer={null}
-      onCancel={onClose}
+      onCancel={handleClose}
       width={720}
       centered
     >
@@ -90,7 +161,7 @@ export function SessionHistoryModal({
           allowClear
           placeholder="按世界书筛选"
           value={worldBookFilter}
-          onChange={(value) => setWorldBookFilter(value ?? null)}
+          onChange={(value) => setUiField('worldBookFilter', value ?? null)}
           options={worldBooks.map((worldBook) => ({ value: worldBook.id, label: worldBook.name }))}
           style={filterSelectStyle}
         />
@@ -99,7 +170,7 @@ export function SessionHistoryModal({
           allowClear
           placeholder="按角色卡筛选"
           value={characterCardFilter}
-          onChange={(value) => setCharacterCardFilter(value ?? null)}
+          onChange={(value) => setUiField('characterCardFilter', value ?? null)}
           options={characterCards.map((card) => ({ value: card.id, label: card.name }))}
           style={filterSelectStyle}
         />
@@ -112,44 +183,99 @@ export function SessionHistoryModal({
           {filteredSessions.map((session) => {
             const meta = resolveSessionHistoryMeta(session, worldBooks, characterCards);
             const visibleCards = meta.characterCards.slice(0, 3);
+            const isEditing = editingSessionId === session.id;
+            const sessionContent = (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+                  {isEditing ? (
+                    <Input
+                      ref={titleInputRef}
+                      aria-label="会话名称"
+                      value={editingTitle}
+                      onChange={(event) => setUiField('editingTitle', event.target.value)}
+                      onPressEnter={() => void saveTitle()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') cancelEditing();
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                      disabled={isSavingTitle}
+                      style={{ maxWidth: 360 }}
+                    />
+                  ) : (
+                    <strong style={{ color: '#33312e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {session.title}
+                    </strong>
+                  )}
+                  <span style={{ color: '#9a948c', fontSize: 12, flexShrink: 0 }}>
+                    {session.savedAt ? savedAtFormatter.format(new Date(session.savedAt)) : '未保存'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                  {meta.worldBookName ? <Tag color="orange">世界书：{meta.worldBookName}</Tag> : <Tag>未绑定世界书</Tag>}
+                  {visibleCards.length > 0 ? (
+                    visibleCards.map((card) => (
+                      <Tag key={card.id} color="default">角色卡：{card.name}</Tag>
+                    ))
+                  ) : (
+                    <Tag>未绑定角色卡</Tag>
+                  )}
+                </div>
+              </>
+            );
             return (
               <div
                 key={session.id}
                 style={sessionHistoryItemStyle}
               >
-                <button
-                  type="button"
-                  aria-label={`打开${session.title}`}
-                  onClick={() => handleOpenSession(session.id)}
-                  style={sessionHistoryOpenButtonStyle}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
-                    <strong style={{ color: '#33312e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {session.title}
-                    </strong>
-                    <span style={{ color: '#9a948c', fontSize: 12, flexShrink: 0 }}>
-                      {session.savedAt ? savedAtFormatter.format(new Date(session.savedAt)) : '未保存'}
-                    </span>
+                {isEditing ? (
+                  <div style={{ ...sessionHistoryOpenButtonStyle, cursor: 'default' }}>
+                    {sessionContent}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-                    {meta.worldBookName ? <Tag color="orange">世界书：{meta.worldBookName}</Tag> : <Tag>未绑定世界书</Tag>}
-                    {visibleCards.length > 0 ? (
-                      visibleCards.map((card) => (
-                        <Tag key={card.id} color="default">角色卡：{card.name}</Tag>
-                      ))
-                    ) : (
-                      <Tag>未绑定角色卡</Tag>
-                    )}
-                  </div>
-                </button>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={`打开${session.title}`}
+                    onClick={() => handleOpenSession(session.id)}
+                    style={sessionHistoryOpenButtonStyle}
+                  >
+                    {sessionContent}
+                  </button>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', paddingRight: 8 }}>
-                  <Button
-                    type="text"
-                    danger
-                    aria-label={`删除${session.title}`}
-                    icon={<DeleteOutlined />}
-                    onClick={() => void onDeleteSession(session.id)}
-                  />
+                  {isEditing ? (
+                    <>
+                      <Button
+                        type="text"
+                        aria-label="确认修改名称"
+                        icon={<CheckOutlined />}
+                        loading={isSavingTitle}
+                        onClick={() => void saveTitle()}
+                      />
+                      <Button
+                        type="text"
+                        aria-label="取消修改名称"
+                        icon={<CloseOutlined />}
+                        disabled={isSavingTitle}
+                        onClick={cancelEditing}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        type="text"
+                        aria-label={`修改${session.title}的名称`}
+                        icon={<EditOutlined />}
+                        onClick={() => startEditing(session)}
+                      />
+                      <Button
+                        type="text"
+                        danger
+                        aria-label={`删除${session.title}`}
+                        icon={<DeleteOutlined />}
+                        onClick={() => void onDeleteSession(session.id)}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             );

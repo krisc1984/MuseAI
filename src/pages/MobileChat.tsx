@@ -21,6 +21,7 @@ import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
 import { createStableContentKey } from '../utils/renderKeys';
 import { useStateGroup } from '../utils/reducerState';
 import { ensureSessionId } from '../utils/sessionIds';
+import { resolveSessionTitle } from '../utils/sessionTitle';
 import type { Message, AgentSessionSummary } from '../stores/useAgentStore';
 
 interface MobileChatUiState {
@@ -176,7 +177,7 @@ const useMobileChatView = () => {
       .catch((e) => console.error('加载会话列表失败:', e));
   }, [setSessions]);
 
-  const saveCurrentSession = async (customMessages?: Message[]) => {
+  const saveCurrentSession = async (customMessages?: Message[], title = sessionTitle) => {
     const list = customMessages || messagesRef.current;
     if (list.length === 0) return false;
     const currentSessionId = ensureSessionId(sessionId, 'partner-session');
@@ -186,7 +187,7 @@ const useMobileChatView = () => {
     try {
       const record = {
         id: currentSessionId,
-        title: sessionTitle,
+        title,
         messages: list,
         savedAt: Date.now(),
         selectedReferenceFiles: [],
@@ -223,12 +224,20 @@ const useMobileChatView = () => {
         }
       }
       const chatHistoryText = chatHistoryLines.join('\n\n');
-      const res = await appInvoke<{ title: string }>('summarize_text', {
-        request: { text: chatHistoryText }
+      const finalTitle = await resolveSessionTitle({
+        currentTitle: sessionTitle,
+        defaultTitle: '新聊天',
+        messages,
+        finalFallback: '未命名会话',
+        summarize: async () => {
+          const res = await appInvoke<{ title: string }>('summarize_text', {
+            request: { text: chatHistoryText },
+          });
+          return res.title;
+        },
       });
-      const generatedTitle = res.title;
-      setSessionTitle(generatedTitle);
-      const saved = await saveCurrentSession();
+      setSessionTitle(finalTitle);
+      const saved = await saveCurrentSession(undefined, finalTitle);
       if (!saved) {
         message.error('保存对话失败，请稍后重试');
         return;

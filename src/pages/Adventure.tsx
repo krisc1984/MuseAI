@@ -43,6 +43,7 @@ import { createStableContentKey, createStableToolKey } from '../utils/renderKeys
 import { useStateGroup } from '../utils/reducerState';
 import { ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
+import { resolveSessionTitle } from '../utils/sessionTitle';
 
 interface ChatStreamEvent {
   runId: string;
@@ -817,7 +818,7 @@ const useAdventureView = () => {
     return nextSessionId;
   }, [setSessionId]);
 
-  const saveCurrentSession = async () => {
+  const saveCurrentSession = async (title = sessionTitleRef.current) => {
     const userMessages = messagesRef.current.filter(m => m.role === 'user');
     if (userMessages.length === 0) return false;
     const currentSessionId = ensureCurrentSessionId();
@@ -826,7 +827,7 @@ const useAdventureView = () => {
       await invoke<AgentSessionSummary>('save_agent_session', {
         session: {
           id: currentSessionId,
-          title: sessionTitleRef.current,
+          title,
           savedAt: Date.now(),
           sessionKind: 'story',
           messages: messagesRef.current,
@@ -861,20 +862,26 @@ const useAdventureView = () => {
         }
         return lines;
       }, []).join('\n\n');
-      const generatedTitle = await invoke<string>('summarize_text', {
-        request: {
-          modelInterface: settings.modelInterface,
-          baseUrl: settings.llmBaseUrl,
-          apiKey: settings.llmApiKey,
-          model: settings.llmModel,
-          temperature: storyAgentConfig.temperature ?? 0.3,
-          maxOutputTokens: 64,
-          text: chatHistoryText,
-        },
+      const finalTitle = await resolveSessionTitle({
+        currentTitle: sessionTitleRef.current,
+        defaultTitle: '新故事',
+        messages,
+        finalFallback: '未命名故事',
+        summarize: () => invoke<string>('summarize_text', {
+          request: {
+            modelInterface: settings.modelInterface,
+            baseUrl: settings.llmBaseUrl,
+            apiKey: settings.llmApiKey,
+            model: settings.llmModel,
+            temperature: storyAgentConfig.temperature ?? 0.3,
+            maxOutputTokens: 64,
+            text: chatHistoryText,
+          },
+        }),
       });
-      sessionTitleRef.current = generatedTitle;
-      setSessionTitle(generatedTitle);
-      const saved = await saveCurrentSession();
+      sessionTitleRef.current = finalTitle;
+      setSessionTitle(finalTitle);
+      const saved = await saveCurrentSession(finalTitle);
       if (!saved) {
         message.error('保存对话失败，请稍后重试');
         return;
@@ -923,6 +930,15 @@ const useAdventureView = () => {
       console.error('删除会话失败:', err);
       message.error('删除会话失败');
     }
+  };
+
+  const handleRenameSession = async (id: string, title: string) => {
+    await invoke('update_agent_session_title', { id, title });
+    if (id === sessionIdRef.current) {
+      sessionTitleRef.current = title;
+      setSessionTitle(title);
+    }
+    await refreshSessions();
   };
 
   const handleArchiveMemory = async () => {
@@ -1355,6 +1371,7 @@ const useAdventureView = () => {
         onClose={() => setIsHistoryOpen(false)}
         onOpenSession={openSession}
         onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
       />
 
       {/* Main chat layout */}

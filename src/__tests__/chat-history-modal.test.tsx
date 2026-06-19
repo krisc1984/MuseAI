@@ -51,7 +51,7 @@ const harborCharacterCard = {
 
 let sessionSummaries: any[] = [];
 
-const invokeMock = vi.fn(async (command: string, args?: any) => {
+const defaultInvoke = async (command: string, args?: any) => {
   if (command === 'list_agent_sessions') return sessionSummaries;
   if (command === 'load_agent_session') {
     return {
@@ -68,11 +68,18 @@ const invokeMock = vi.fn(async (command: string, args?: any) => {
     };
   }
   if (command === 'delete_agent_session') return null;
+  if (command === 'update_agent_session_title') {
+    const session = sessionSummaries.find((item) => item.id === args.id);
+    if (session) session.title = args.title;
+    return { ...session, savedAt: Date.now() };
+  }
   if (command === 'summarize_text') return '新保存标题';
   if (command === 'start_chat_completion_stream') return 'run-1';
   if (command === 'save_agent_session') return { id: args.session.id, title: args.session.title, savedAt: Date.now() };
   return undefined;
-});
+};
+
+const invokeMock = vi.fn(defaultInvoke);
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (command: string, args?: any) => invokeMock(command, args),
@@ -138,7 +145,8 @@ function resetStores() {
       },
     },
   });
-  invokeMock.mockClear();
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(defaultInvoke);
 }
 
 describe('Chat history modal', () => {
@@ -204,6 +212,78 @@ describe('Chat history modal', () => {
             selectedWorldBookId: worldBook.id,
             characterCardId: characterCard.id,
           }),
+        }),
+      );
+    });
+  });
+
+  it('renames a history session without opening it', async () => {
+    usePartnerChatStore.setState({
+      sessionId: 'partner-session-1',
+      sessionTitle: '雾城夜谈',
+    });
+    render(<Chat />);
+
+    fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
+    expect(await screen.findByText('历史聊天')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '修改雾城夜谈的名称' }));
+    const input = screen.getByRole('textbox', { name: '会话名称' });
+    fireEvent.change(input, { target: { value: '  雾城重逢  ' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认修改名称' }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('update_agent_session_title', {
+        id: 'partner-session-1',
+        title: '雾城重逢',
+      });
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('load_agent_session', { id: 'partner-session-1' });
+    expect(await screen.findByText('雾城重逢')).toBeInTheDocument();
+    expect(usePartnerChatStore.getState().sessionTitle).toBe('雾城重逢');
+  });
+
+  it('keeps an existing session title without summarizing it again', async () => {
+    usePartnerChatStore.setState({
+      sessionTitle: '用户自定义标题',
+      messages: [{ id: 'm1', role: 'user', content: '继续聊天', tools: [] }],
+    });
+    render(<Chat />);
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'save_agent_session',
+        expect.objectContaining({
+          session: expect.objectContaining({ title: '用户自定义标题' }),
+        }),
+      );
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('summarize_text', expect.anything());
+  });
+
+  it('falls back to the first user message when title generation fails', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: any) => {
+      if (command === 'save_app_state') return undefined;
+      if (command === 'list_agent_sessions') return sessionSummaries;
+      if (command === 'summarize_text') throw new Error('生成标题为空');
+      if (command === 'save_agent_session') return { id: args.session.id, title: args.session.title, savedAt: Date.now() };
+      return undefined;
+    });
+    usePartnerChatStore.setState({
+      sessionTitle: '新聊天',
+      messages: [{ id: 'm1', role: 'user', content: '   请陪我聊聊今天发生的事情   ', tools: [] }],
+    });
+    render(<Chat />);
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'save_agent_session',
+        expect.objectContaining({
+          session: expect.objectContaining({ title: '请陪我聊聊今天发生的事情' }),
         }),
       );
     });
