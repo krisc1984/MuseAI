@@ -28,7 +28,7 @@ pub use commands::workspace::*;
 pub use models::{DailyActivity, WritingStats};
 pub use tools::*;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 static BASH_PERMISSION_CHANNELS: OnceLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
     OnceLock::new();
