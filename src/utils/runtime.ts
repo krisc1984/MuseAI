@@ -1,6 +1,68 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
+// Type-safe command definitions
+export interface AppInvokeCommands {
+  get_mobile_service_status: {
+    args: void;
+    result: { isRunning: boolean; url: string | null; error: string | null };
+  };
+  list_agent_sessions: {
+    args: { prefix?: string; sessionKind?: string };
+    result: Array<{ id: string; title: string; createdAt: number; updatedAt: number; savedAt: number }>;
+  };
+  load_agent_session: {
+    args: { id: string };
+    result: any; // Session object structure varies
+  };
+  save_agent_session: {
+    args: { session: any };
+    result: any;
+  };
+  delete_agent_session: {
+    args: { id: string };
+    result: void;
+  };
+  update_agent_session_title: {
+    args: { id: string; title: string };
+    result: any;
+  };
+  summarize_text: {
+    args: { request: { text: string } };
+    result: { title: string };
+  };
+  analyze_character_memory: {
+    args: { sessionId: string; characterCardId?: string | null; request?: any };
+    result: string | Record<string, any>;
+  };
+  archive_agent_session: {
+    args: { sessionId: string; payload: any };
+    result: void;
+  };
+  start_chat_completion_stream: {
+    args: { request: any };
+    result: { runId: string };
+  };
+  stop_chat_stream: {
+    args: { runId: string };
+    result: void;
+  };
+  load_app_state: {
+    args: { name: string };
+    result: string;
+  };
+  save_app_state: {
+    args: { name: string; content: string };
+    result: void;
+  };
+  read_file: {
+    args: { path: string };
+    result: string;
+  };
+}
+
+export type AppInvokeCommand = keyof AppInvokeCommands;
+
 export const isTauriHost = (): boolean => {
   if (typeof window === 'undefined') return false;
   // If in vitest/jest test environment, default to desktop/tauri mock invoke
@@ -89,9 +151,13 @@ if (typeof window !== 'undefined') {
   }
 }
 
-export async function appInvoke<T>(cmd: string, args?: any): Promise<T> {
+export async function appInvoke<C extends AppInvokeCommand>(
+  cmd: C,
+  ...args: AppInvokeCommands[C]['args'] extends void ? [] : [AppInvokeCommands[C]['args']]
+): Promise<AppInvokeCommands[C]['result']> {
   if (isTauriHost()) {
-    return invoke<T>(cmd, args);
+    // Type assertion needed because invoke doesn't know about our conditional args
+    return invoke<AppInvokeCommands[C]['result']>(cmd, args[0] as any);
   }
 
   // Mobile HTTP mapping
@@ -106,64 +172,66 @@ export async function appInvoke<T>(cmd: string, args?: any): Promise<T> {
     return `${window.location.origin}${path}`;
   };
 
+  const cmdArgs = args[0] as any;
+
   switch (cmd) {
     case 'get_mobile_service_status': {
       const res = await fetch(getUrl('/api/mobile/status'), { headers, cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'list_agent_sessions': {
       const params = new URLSearchParams();
-      if (args?.prefix) params.set('prefix', args.prefix);
-      if (args?.sessionKind) params.set('sessionKind', args.sessionKind);
+      if (cmdArgs?.prefix) params.set('prefix', cmdArgs.prefix);
+      if (cmdArgs?.sessionKind) params.set('sessionKind', cmdArgs.sessionKind);
       const query = params.toString();
       const res = await fetch(getUrl(`/api/mobile/sessions${query ? `?${query}` : ''}`), { headers, cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'load_agent_session': {
-      const res = await fetch(getUrl(`/api/mobile/sessions/${args.id}`), { headers, cache: 'no-store' });
+      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}`), { headers, cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'save_agent_session': {
       const res = await fetch(getUrl('/api/mobile/sessions'), {
         method: 'POST',
         headers,
         cache: 'no-store',
-        body: JSON.stringify(args.session),
+        body: JSON.stringify(cmdArgs.session),
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'delete_agent_session': {
-      const res = await fetch(getUrl(`/api/mobile/sessions/${args.id}`), {
+      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}`), {
         method: 'DELETE',
         headers,
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return undefined as any;
+      return undefined;
     }
     case 'update_agent_session_title': {
-      const res = await fetch(getUrl(`/api/mobile/sessions/${args.id}/title`), {
+      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}/title`), {
         method: 'PUT',
         headers,
         cache: 'no-store',
-        body: JSON.stringify({ title: args.title }),
+        body: JSON.stringify({ title: cmdArgs.title }),
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'summarize_text': {
       const res = await fetch(getUrl('/api/mobile/summarize'), {
         method: 'POST',
         headers,
         cache: 'no-store',
-        body: JSON.stringify({ text: args.request.text }),
+        body: JSON.stringify({ text: cmdArgs.request.text }),
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'analyze_character_memory': {
       // For memory analysis on mobile, we use the session ID from args to call the automated server-side endpoint.
@@ -172,7 +240,7 @@ export async function appInvoke<T>(cmd: string, args?: any): Promise<T> {
       // To keep it simple, we can pass `sessionId` inside our mobile invoke, or read it from args.
       // Let's check: can we pass `sessionId` as a field of args, e.g. invoke('analyze_character_memory', { request, sessionId })?
       // Yes! We will update Chat/Story to pass `sessionId` as well.
-      const sessionId = args?.sessionId;
+      const sessionId = cmdArgs.sessionId;
       if (!sessionId) {
         throw new Error('Missing sessionId for mobile memory analysis');
       }
@@ -180,15 +248,15 @@ export async function appInvoke<T>(cmd: string, args?: any): Promise<T> {
         method: 'POST',
         headers,
         cache: 'no-store',
-        body: JSON.stringify({ characterCardId: args?.characterCardId ?? null }),
+        body: JSON.stringify({ characterCardId: cmdArgs.characterCardId ?? null }),
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'archive_agent_session': {
       // Special mobile-only cmd to archive session memory.
-      const sessionId = args?.sessionId;
-      const payload = args?.payload;
+      const sessionId = cmdArgs.sessionId;
+      const payload = cmdArgs.payload;
       if (!sessionId || !payload) {
         throw new Error('Missing sessionId or payload for mobile archiving');
       }
@@ -199,45 +267,44 @@ export async function appInvoke<T>(cmd: string, args?: any): Promise<T> {
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return undefined as any;
+      return undefined;
     }
     case 'start_chat_completion_stream': {
-      const isStory = args?.request?.allowedTools && args.request.allowedTools.length > 0;
+      const isStory = cmdArgs.request?.allowedTools && cmdArgs.request.allowedTools.length > 0;
       const endpoint = isStory ? '/api/mobile/story/start' : '/api/mobile/chat/start';
       const res = await fetch(getUrl(endpoint), {
         method: 'POST',
         headers,
         cache: 'no-store',
-        body: JSON.stringify(args.request),
+        body: JSON.stringify(cmdArgs.request),
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return res.json() as Promise<T>;
+      return res.json();
     }
     case 'stop_chat_stream': {
       const res = await fetch(getUrl('/api/mobile/chat/stop'), {
         method: 'POST',
         headers,
         cache: 'no-store',
-        body: JSON.stringify({ run_id: args.runId }),
+        body: JSON.stringify({ run_id: cmdArgs.runId }),
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return undefined as any;
+      return undefined;
     }
     case 'load_app_state': {
-      const res = await fetch(getUrl(`/api/mobile/state/${args.name}`), { headers, cache: 'no-store' });
+      const res = await fetch(getUrl(`/api/mobile/state/${cmdArgs.name}`), { headers, cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      const text = await res.text();
-      return text as unknown as T;
+      return res.text();
     }
     case 'save_app_state': {
-      const res = await fetch(getUrl(`/api/mobile/state/${args.name}`), {
+      const res = await fetch(getUrl(`/api/mobile/state/${cmdArgs.name}`), {
         method: 'POST',
         headers,
         cache: 'no-store',
-        body: args.content,
+        body: cmdArgs.content,
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      return undefined as any;
+      return undefined;
     }
     default:
       throw new Error(`Command ${cmd} is not supported on mobile browser.`);

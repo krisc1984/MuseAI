@@ -8,7 +8,7 @@ export function createDiskStorage(
   return {
     getItem: async () => {
       try {
-        const content = await appInvoke<string>('load_app_state', { name });
+        const content = await appInvoke('load_app_state', { name });
         return content;
       } catch {
         if (localStorageKey) {

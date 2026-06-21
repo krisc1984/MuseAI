@@ -110,7 +110,7 @@ describe('Runtime Utility & Bridge', () => {
       });
       globalThis.fetch = mockFetch;
 
-      const result = await appInvoke<any>('get_mobile_service_status');
+      const result = await appInvoke('get_mobile_service_status');
       expect(result.isRunning).toBe(true);
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/status', {
         cache: 'no-store',
@@ -128,7 +128,7 @@ describe('Runtime Utility & Bridge', () => {
       });
       globalThis.fetch = mockFetch;
 
-      const result = await appInvoke<any>('list_agent_sessions', { prefix: 'partner-session-' });
+      const result = await appInvoke('list_agent_sessions', { prefix: 'partner-session-' });
       expect(result).toEqual([]);
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/sessions?prefix=partner-session-', {
         cache: 'no-store',
@@ -165,7 +165,7 @@ describe('Runtime Utility & Bridge', () => {
       globalThis.fetch = mockFetch;
 
       const sessionObj = { id: 's1', title: 'test session' };
-      const result = await appInvoke<any>('save_agent_session', { session: sessionObj });
+      const result = await appInvoke('save_agent_session', { session: sessionObj });
       expect(result.id).toBe('s1');
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/sessions', {
         method: 'POST',
@@ -198,7 +198,7 @@ describe('Runtime Utility & Bridge', () => {
         characterCardId: 'card-1',
         selectedWorldBookId: null,
       };
-      await appInvoke<any>('save_agent_session', { session: sessionObj });
+      await appInvoke('save_agent_session', { session: sessionObj });
 
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/sessions', expect.objectContaining({
         method: 'POST',
@@ -214,7 +214,7 @@ describe('Runtime Utility & Bridge', () => {
       globalThis.fetch = mockFetch;
 
       const reqBody = { messages: [] };
-      const result = await appInvoke<any>('start_chat_completion_stream', { request: reqBody });
+      const result = await appInvoke('start_chat_completion_stream', { request: reqBody });
       expect(result.runId).toBe('run-123');
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/chat/start', {
         method: 'POST',

@@ -138,7 +138,7 @@ const MobileBond: React.FC = () => {
 
       // Reload partner store from backend to ensure latest character cards
       try {
-        const partnerStoreContent = await appInvoke<string>('load_app_state', { name: 'partner-store' });
+        const partnerStoreContent = await appInvoke('load_app_state', { name: 'partner-store' });
         if (partnerStoreContent) {
           const parsed = JSON.parse(partnerStoreContent);
           if (parsed.state) {
@@ -150,7 +150,7 @@ const MobileBond: React.FC = () => {
       }
 
       try {
-        const summaries = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'partner-session-' });
+        const summaries = await appInvoke('list_agent_sessions', { prefix: 'partner-session-' });
         patchUiState({ sessions: summaries });
       } catch (err) {
         console.error('加载会话足迹失败:', err);
@@ -159,7 +159,7 @@ const MobileBond: React.FC = () => {
       }
 
       try {
-        const summaries = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', {
+        const summaries = await appInvoke('list_agent_sessions', {
           prefix: 'story-session-',
           sessionKind: 'story',
         });
@@ -193,7 +193,7 @@ const MobileBond: React.FC = () => {
     setExpandedSessionId(id);
     setLoadingRecord(true);
     try {
-      const record = await appInvoke<AgentSessionRecord>('load_agent_session', { id });
+      const record = await appInvoke('load_agent_session', { id });
       setExpandedRecord(record);
     } catch (err) {
       console.error('加载会话详情失败:', err);
@@ -211,7 +211,7 @@ const MobileBond: React.FC = () => {
     setExpandedAdventureId(id);
     setLoadingAdventureRecord(true);
     try {
-      const record = await appInvoke<AgentSessionRecord>('load_agent_session', { id });
+      const record = await appInvoke('load_agent_session', { id });
       setExpandedAdventureRecord(record);
     } catch (err) {
       console.error('加载冒险详情失败:', err);

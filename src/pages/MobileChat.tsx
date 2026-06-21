@@ -172,7 +172,7 @@ const useMobileChatView = () => {
 
   // Load session list on mount
   useEffect(() => {
-    appInvoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'partner-session-' })
+    appInvoke('list_agent_sessions', { prefix: 'partner-session-' })
       .then((list) => setSessions(list))
       .catch((e) => console.error('加载会话列表失败:', e));
   }, [setSessions]);
@@ -198,10 +198,10 @@ const useMobileChatView = () => {
         characterCardId: selectedCharacterCardId,
         selectedWorldBookId,
       };
-      await appInvoke<AgentSessionSummary>('save_agent_session', { session: record });
+      await appInvoke('save_agent_session', { session: record });
       
       // Update session summary list
-      const listRes = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'partner-session-' });
+      const listRes = await appInvoke('list_agent_sessions', { prefix: 'partner-session-' });
       setSessions(listRes);
       return true;
     } catch (e) {
@@ -230,7 +230,7 @@ const useMobileChatView = () => {
         messages,
         finalFallback: '未命名会话',
         summarize: async () => {
-          const res = await appInvoke<{ title: string }>('summarize_text', {
+          const res = await appInvoke('summarize_text', {
             request: { text: chatHistoryText },
           });
           return res.title;
@@ -257,7 +257,7 @@ const useMobileChatView = () => {
       return;
     }
     try {
-      const record = await appInvoke<any>('load_agent_session', { id });
+      const record = await appInvoke('load_agent_session', { id });
       setSessionId(record.id);
       setSessionTitle(record.title);
       setMessages(record.messages || []);
@@ -285,7 +285,7 @@ const useMobileChatView = () => {
           if (sessionId === id) {
             createNewSession();
           }
-          const listRes = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'partner-session-' });
+          const listRes = await appInvoke('list_agent_sessions', { prefix: 'partner-session-' });
           setSessions(listRes);
         } catch (e) {
           message.error('删除会话失败');
@@ -371,7 +371,7 @@ const useMobileChatView = () => {
     }));
 
     try {
-      const { runId } = await appInvoke<{ runId: string }>('start_chat_completion_stream', {
+      const { runId } = await appInvoke('start_chat_completion_stream', {
         request: {
           agentId: 'partnerChat',
           modelInterface: settings.modelInterface,
@@ -502,7 +502,7 @@ const useMobileChatView = () => {
         return;
       }
 
-      const result = await appInvoke<string | Record<string, any>>('analyze_character_memory', { sessionId });
+      const result = await appInvoke('analyze_character_memory', { sessionId });
       const parsed = parseArchiveAnalysisResponse(result);
       setArchiveAnalysis(parsed);
       setEditedTitle(parsed.sessionTitle || parsed.recommendedSessionTitle || sessionTitle);
@@ -536,11 +536,11 @@ const useMobileChatView = () => {
       message.success('伴侣记忆封存成功！该会话已归档锁定。');
 
       // Reload sessions
-      const sessList = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'partner-session-' });
+      const sessList = await appInvoke('list_agent_sessions', { prefix: 'partner-session-' });
       setSessions(sessList);
 
       // Reload partner store
-      const partnerStoreContent = await appInvoke<string>('load_app_state', { name: 'partner-store' });
+      const partnerStoreContent = await appInvoke('load_app_state', { name: 'partner-store' });
       if (partnerStoreContent) {
         const parsed = JSON.parse(partnerStoreContent);
         if (parsed.state) {

@@ -8,7 +8,7 @@ const fileNameFromPath = (path: string) => {
 };
 
 export const resolveOutlineMaterial = async (path: string): Promise<BookTravelMaterial> => {
-  const content = await appInvoke<string>('read_file', { path });
+  const content = await appInvoke('read_file', { path });
   return {
     id: path,
     title: fileNameFromPath(path),
