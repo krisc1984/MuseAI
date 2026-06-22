@@ -29,7 +29,7 @@ import {
   getStoryAllowedTools,
   getRolePlayCharacterName,
 } from './storyAgent';
-import type { Message, AgentSessionSummary, AgentToolEntry } from '../stores/useAgentStore';
+import type { AgentSessionRecord, AgentToolEntry, Message } from '../stores/useAgentStore';
 
 interface MobileStoryUiState {
   isArchiveModalOpen: boolean;
@@ -196,7 +196,7 @@ const useMobileStoryView = () => {
 
   // Load session list on mount
   useEffect(() => {
-    appInvoke<AgentSessionSummary[]>('list_agent_sessions', {
+    appInvoke('list_agent_sessions', {
       prefix: 'story-session-',
       sessionKind: 'story',
     })
@@ -212,7 +212,7 @@ const useMobileStoryView = () => {
       setSessionId(currentSessionId);
     }
     try {
-      const record = {
+      const record: AgentSessionRecord = {
         id: currentSessionId,
         title,
         messages: list,
@@ -227,10 +227,10 @@ const useMobileStoryView = () => {
         selectedWorldBookId,
         dynamicRoleLoadingEnabled,
       };
-      await appInvoke<AgentSessionSummary>('save_agent_session', { session: record });
-      
+      await appInvoke('save_agent_session', { session: record });
+
       // Update session summary list
-      const listRes = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', {
+      const listRes = await appInvoke('list_agent_sessions', {
         prefix: 'story-session-',
         sessionKind: 'story',
       });
@@ -262,10 +262,10 @@ const useMobileStoryView = () => {
         messages,
         finalFallback: '未命名故事',
         summarize: async () => {
-          const res = await appInvoke<{ title: string }>('summarize_text', {
+          const res = await appInvoke('summarize_text', {
             request: { text: chatHistoryText },
           });
-          return res.title;
+          return typeof res === 'string' ? res : res.title;
         },
       });
       setSessionTitle(finalTitle);
@@ -289,7 +289,7 @@ const useMobileStoryView = () => {
       return;
     }
     try {
-      const record = await appInvoke<any>('load_agent_session', { id });
+      const record = await appInvoke('load_agent_session', { id });
       setSessionId(record.id);
       setSessionTitle(record.title);
       setMessages(record.messages || []);
@@ -318,7 +318,7 @@ const useMobileStoryView = () => {
           if (sessionId === id) {
             createNewSession();
           }
-          const listRes = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', {
+          const listRes = await appInvoke('list_agent_sessions', {
             prefix: 'story-session-',
             sessionKind: 'story',
           });
@@ -408,7 +408,7 @@ const useMobileStoryView = () => {
     const storyAgentConfig = settings.agentConfigs?.[storyAgentConfigId] || {};
 
     try {
-      const { runId } = await appInvoke<{ runId: string }>('start_chat_completion_stream', {
+      const { runId } = await appInvoke('start_chat_completion_stream', {
         request: {
           agentId: storyAgentConfigId,
           modelInterface: settings.modelInterface,
@@ -630,7 +630,7 @@ const useMobileStoryView = () => {
 
       const filteredCards = selectedCards.filter(card => tempSelectedCardIds.includes(card.id));
       const results = await Promise.all(filteredCards.map(async (card) => {
-        const result = await appInvoke<string | Record<string, any>>('analyze_character_memory', {
+        const result = await appInvoke('analyze_character_memory', {
           sessionId,
           characterCardId: card.id,
         });
@@ -692,14 +692,14 @@ const useMobileStoryView = () => {
       message.success('记忆封存成功！故事已锁定归档。');
 
       // Reload sessions
-      const listRes = await appInvoke<AgentSessionSummary[]>('list_agent_sessions', {
+      const listRes = await appInvoke('list_agent_sessions', {
         prefix: 'story-session-',
         sessionKind: 'story',
       });
       setSessions(listRes);
 
       // Reload partner store
-      const partnerStoreContent = await appInvoke<string>('load_app_state', { name: 'partner-store' });
+      const partnerStoreContent = await appInvoke('load_app_state', { name: 'partner-store' });
       if (partnerStoreContent) {
         const parsed = JSON.parse(partnerStoreContent);
         if (parsed.state) {

@@ -25,6 +25,9 @@ jobs:
       - name: Run frontend tests
         run: npm run test
 
+      - name: Build frontend
+        run: npm run build
+
   rust-test:
     name: Rust Tests
     runs-on: ubuntu-22.04
