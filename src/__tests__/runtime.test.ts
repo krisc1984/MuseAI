@@ -146,7 +146,7 @@ describe('Runtime Utility & Bridge', () => {
       });
       globalThis.fetch = mockFetch;
 
-      await appInvoke<any>('list_agent_sessions', {
+      await appInvoke('list_agent_sessions', {
         prefix: 'story-session-',
         sessionKind: 'story',
       });
@@ -164,7 +164,15 @@ describe('Runtime Utility & Bridge', () => {
       });
       globalThis.fetch = mockFetch;
 
-      const sessionObj = { id: 's1', title: 'test session' };
+      const sessionObj = {
+        id: 's1',
+        title: 'test session',
+        savedAt: 0,
+        messages: [],
+        selectedReferenceFiles: [],
+        selectedOutlineFile: null,
+        todos: [],
+      };
       const result = await appInvoke('save_agent_session', { session: sessionObj });
       expect(result.id).toBe('s1');
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/sessions', {

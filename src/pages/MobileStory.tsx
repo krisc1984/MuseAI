@@ -29,7 +29,7 @@ import {
   getStoryAllowedTools,
   getRolePlayCharacterName,
 } from './storyAgent';
-import type { Message, AgentSessionSummary, AgentToolEntry } from '../stores/useAgentStore';
+import type { AgentSessionRecord, AgentToolEntry, Message } from '../stores/useAgentStore';
 
 interface MobileStoryUiState {
   isArchiveModalOpen: boolean;
@@ -212,7 +212,7 @@ const useMobileStoryView = () => {
       setSessionId(currentSessionId);
     }
     try {
-      const record = {
+      const record: AgentSessionRecord = {
         id: currentSessionId,
         title,
         messages: list,
@@ -265,7 +265,7 @@ const useMobileStoryView = () => {
           const res = await appInvoke('summarize_text', {
             request: { text: chatHistoryText },
           });
-          return res.title;
+          return typeof res === 'string' ? res : res.title;
         },
       });
       setSessionTitle(finalTitle);

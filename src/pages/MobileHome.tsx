@@ -5,7 +5,6 @@ import { appInvoke, clearMobileToken, getMobileToken, setMobileToken } from '../
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
-import type { AgentSessionSummary } from '../stores/useAgentStore';
 
 type ConnectionStatus = 'waiting' | 'verifying' | 'verified' | 'invalid';
 
@@ -59,10 +58,10 @@ const MobileHome: React.FC = () => {
         useStoryStore.persist.rehydrate(),
       ]);
       const [chatSessions, storySessions] = await Promise.all([
-        appInvoke<AgentSessionSummary[]>('list_agent_sessions', {
+        appInvoke('list_agent_sessions', {
           prefix: 'partner-session-',
         }),
-        appInvoke<AgentSessionSummary[]>('list_agent_sessions', {
+        appInvoke('list_agent_sessions', {
           prefix: 'story-session-',
           sessionKind: 'story',
         }),

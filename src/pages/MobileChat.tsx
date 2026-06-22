@@ -22,7 +22,7 @@ import { createStableContentKey } from '../utils/renderKeys';
 import { useStateGroup } from '../utils/reducerState';
 import { ensureSessionId } from '../utils/sessionIds';
 import { resolveSessionTitle } from '../utils/sessionTitle';
-import type { Message, AgentSessionSummary } from '../stores/useAgentStore';
+import type { AgentSessionRecord, Message } from '../stores/useAgentStore';
 
 interface MobileChatUiState {
   isArchiveModalOpen: boolean;
@@ -185,7 +185,7 @@ const useMobileChatView = () => {
       setSessionId(currentSessionId);
     }
     try {
-      const record = {
+      const record: AgentSessionRecord = {
         id: currentSessionId,
         title,
         messages: list,
@@ -233,7 +233,7 @@ const useMobileChatView = () => {
           const res = await appInvoke('summarize_text', {
             request: { text: chatHistoryText },
           });
-          return res.title;
+          return typeof res === 'string' ? res : res.title;
         },
       });
       setSessionTitle(finalTitle);

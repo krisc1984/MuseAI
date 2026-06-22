@@ -1,23 +1,54 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { AgentSessionRecord, AgentSessionSummary } from '../stores/useAgentStore';
+
+interface ArchiveCharacterMemoryPayload {
+  characterCardId: string;
+  userRelationType: string;
+  userInteractionModel: string;
+  userRelationBottomLine: string;
+  keyEvents: string;
+}
+
+interface ArchiveSessionPayload {
+  title: string;
+  userRelationType?: string;
+  userInteractionModel?: string;
+  userRelationBottomLine?: string;
+  keyEvents?: string;
+  characterMemories?: ArchiveCharacterMemoryPayload[];
+}
+
+type ChatCompletionRequest = Record<string, unknown> & {
+  allowedTools?: string[];
+};
+
+type AgentSessionRecordResponse = AgentSessionRecord & {
+  character_card_id?: string | null;
+  character_card_ids?: string[] | null;
+  selected_world_book_id?: string | null;
+  context_compaction?: AgentSessionRecord['contextCompaction'];
+  is_archived?: boolean;
+  dynamic_role_loading_enabled?: boolean;
+};
 
 // Type-safe command definitions
 export interface AppInvokeCommands {
   get_mobile_service_status: {
     args: void;
-    result: { isRunning: boolean; url: string | null; error: string | null };
+    result: { isRunning: boolean; url: string | null; token: string | null; error: string | null };
   };
   list_agent_sessions: {
     args: { prefix?: string; sessionKind?: string };
-    result: Array<{ id: string; title: string; createdAt: number; updatedAt: number; savedAt: number }>;
+    result: AgentSessionSummary[];
   };
   load_agent_session: {
     args: { id: string };
-    result: any; // Session object structure varies
+    result: AgentSessionRecordResponse;
   };
   save_agent_session: {
-    args: { session: any };
-    result: any;
+    args: { session: AgentSessionRecord };
+    result: AgentSessionSummary;
   };
   delete_agent_session: {
     args: { id: string };
@@ -25,22 +56,22 @@ export interface AppInvokeCommands {
   };
   update_agent_session_title: {
     args: { id: string; title: string };
-    result: any;
+    result: AgentSessionSummary;
   };
   summarize_text: {
     args: { request: { text: string } };
-    result: { title: string };
+    result: string | { title: string };
   };
   analyze_character_memory: {
-    args: { sessionId: string; characterCardId?: string | null; request?: any };
-    result: string | Record<string, any>;
+    args: { sessionId: string; characterCardId?: string | null };
+    result: unknown;
   };
   archive_agent_session: {
-    args: { sessionId: string; payload: any };
+    args: { sessionId: string; payload: ArchiveSessionPayload };
     result: void;
   };
   start_chat_completion_stream: {
-    args: { request: any };
+    args: { request: ChatCompletionRequest };
     result: { runId: string };
   };
   stop_chat_stream: {
