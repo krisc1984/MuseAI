@@ -331,6 +331,10 @@ describe('Chat history modal', () => {
           }),
         }),
       );
+      expect(usePartnerChatStore.getState().activeRun).toEqual({
+        runId: 'run-1',
+        messageId: expect.any(String),
+      });
     });
   });
 });
