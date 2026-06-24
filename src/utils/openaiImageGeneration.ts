@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 export type OpenAIImageSize = '1024x1024' | '1024x1536' | '1536x1024';
 
 export interface GenerateImageRequest {
@@ -35,6 +37,45 @@ const readErrorMessage = async (response: Response) => {
   }
 };
 
+const isRealTauriHost = () => {
+  if (typeof window === 'undefined') return false;
+  return (
+    (window as any).__TAURI_INTERNALS__ !== undefined ||
+    (window as any).__TAURI__ !== undefined ||
+    (window as any).__TAURI_IPC__ !== undefined ||
+    (typeof navigator !== 'undefined' && navigator.userAgent?.includes('Tauri'))
+  );
+};
+
+const postImageCreate = async (url: string, apiKey: string, body: Record<string, unknown>) => {
+  if (isRealTauriHost()) {
+    try {
+      return await invoke<any>('agnes_image_create', {
+        url,
+        apiKey,
+        body,
+      });
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(`角色视觉图生成失败：${await readErrorMessage(response)}`);
+  }
+
+  return response.json();
+};
+
 export const generateOpenAIImage = async (request: GenerateImageRequest): Promise<GenerateImageResult> => {
   const apiKey = request.apiKey.trim();
   if (!apiKey) {
@@ -61,20 +102,7 @@ export const generateOpenAIImage = async (request: GenerateImageRequest): Promis
     };
   }
 
-  const response = await fetch(`${normalizeImageBaseUrl(request.baseUrl)}/images/generations`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(`角色视觉图生成失败：${await readErrorMessage(response)}`);
-  }
-
-  const data = await response.json();
+  const data = await postImageCreate(`${normalizeImageBaseUrl(request.baseUrl)}/images/generations`, apiKey, body);
   const imageBase64 = data?.data?.[0]?.b64_json;
   const imageUrl = data?.data?.[0]?.url;
   if (imageBase64) {

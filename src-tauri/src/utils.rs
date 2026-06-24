@@ -1,9 +1,11 @@
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::sync::OnceLock;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use walkdir::WalkDir;
 
@@ -355,6 +357,30 @@ pub fn now_millis() -> Result<u64, String> {
         .map_err(|e| e.to_string())?
         .as_millis();
     u64::try_from(millis).map_err(|_| String::from("当前时间戳过大"))
+}
+
+pub fn backend_log_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let doc_dir = app.path().document_dir().map_err(|e| e.to_string())?;
+    Ok(doc_dir.join("MuseAI").join(".logs").join("backend.log"))
+}
+
+pub fn append_backend_log(app: &AppHandle, event: &str, payload: Value) {
+    let Ok(log_path) = backend_log_path(app) else {
+        return;
+    };
+    if let Some(parent) = log_path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let entry = json!({
+        "timestamp": now_millis().unwrap_or(0),
+        "event": event,
+        "payload": payload,
+    });
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+        let _ = writeln!(file, "{}", entry);
+    }
 }
 
 pub fn sanitize_session_id(id: &str) -> Result<String, String> {

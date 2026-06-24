@@ -16,7 +16,7 @@ export interface GalleryVideoTask {
   prompt: string;
   imageUrl: string;
   aspectRatio: '16:9' | '9:16' | '1:1';
-  duration: 5 | 10;
+  duration: 3 | 5 | 10 | 18;
   saveDir?: string;
   fileBaseName?: string;
   status: GalleryVideoTaskStatus;

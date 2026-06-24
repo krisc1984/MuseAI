@@ -178,6 +178,20 @@ export async function appInvoke<T>(cmd: string, args?: any): Promise<T> {
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return undefined as any;
     }
+    case 'export_story_session_markdown': {
+      const sessionId = args?.sessionId;
+      if (!sessionId) {
+        throw new Error('Missing sessionId for story markdown export');
+      }
+      const res = await fetch(getUrl(`/api/mobile/sessions/${sessionId}/export-markdown`), {
+        method: 'POST',
+        headers,
+        cache: 'no-store',
+        body: JSON.stringify({ title: args?.title ?? null }),
+      });
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return res.json() as Promise<T>;
+    }
     case 'start_chat_completion_stream': {
       const isStory = args?.request?.allowedTools && args.request.allowedTools.length > 0;
       const endpoint = isStory ? '/api/mobile/story/start' : '/api/mobile/chat/start';

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_VIDEO_MODEL, createAgnesVideoTask, generateAgnesVideo, normalizeVideoBaseUrl, queryAgnesVideoTask } from '../utils/agnesVideoGeneration';
+import { AGNES_VIDEO_DURATION_OPTIONS, DEFAULT_VIDEO_MODEL, createAgnesVideoTask, generateAgnesVideo, normalizeVideoBaseUrl, queryAgnesVideoTask } from '../utils/agnesVideoGeneration';
 
 const fetchMock = vi.fn();
 
@@ -12,6 +12,13 @@ describe('agnes video generation', () => {
   it('normalizes known Agnes video base urls', () => {
     expect(normalizeVideoBaseUrl('https://apihub.agnes-ai.com/v1/video/generations')).toBe('https://apihub.agnes-ai.com/v1');
     expect(DEFAULT_VIDEO_MODEL).toBe('agnes-video-v2.0');
+  });
+
+  it('maps supported duration presets to Agnes frame settings', () => {
+    expect(AGNES_VIDEO_DURATION_OPTIONS[3]).toMatchObject({ numFrames: 81, frameRate: 24 });
+    expect(AGNES_VIDEO_DURATION_OPTIONS[5]).toMatchObject({ numFrames: 121, frameRate: 24 });
+    expect(AGNES_VIDEO_DURATION_OPTIONS[10]).toMatchObject({ numFrames: 241, frameRate: 24 });
+    expect(AGNES_VIDEO_DURATION_OPTIONS[18]).toMatchObject({ numFrames: 441, frameRate: 24 });
   });
 
   it('returns direct video url when the api responds synchronously', async () => {
@@ -70,6 +77,42 @@ describe('agnes video generation', () => {
     });
   });
 
+  it('submits multi-image video requests with extra_body image array', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        task_id: 'task_123',
+        video_id: 'video_456',
+        status: 'queued',
+      }),
+    });
+
+    await createAgnesVideoTask({
+      apiKey: 'video-key',
+      baseUrl: 'https://apihub.agnes-ai.com/v1',
+      model: 'agnes-video-v2.0',
+      prompt: 'Create a smooth transformation scene',
+      image: ['https://example.com/image1.png', 'https://example.com/image2.png'],
+      width: 1152,
+      height: 768,
+      numFrames: 121,
+      frameRate: 24,
+      negativePrompt: 'blurry',
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      model: 'agnes-video-v2.0',
+      prompt: 'Create a smooth transformation scene',
+      extra_body: {
+        image: ['https://example.com/image1.png', 'https://example.com/image2.png'],
+      },
+      num_frames: 121,
+      frame_rate: 24,
+    });
+  });
+
   it('queries Agnes result with recommended video_id endpoint first', async () => {
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockResolvedValueOnce({
@@ -95,7 +138,7 @@ describe('agnes video generation', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://apihub.agnes-ai.com/agnesapi?video_id=video_456&model_name=agnes-video-v2.0',
+      'https://apihub.agnes-ai.com/agnesapi?video_id=video_456',
       expect.objectContaining({ method: 'GET' }),
     );
     expect(result).toMatchObject({

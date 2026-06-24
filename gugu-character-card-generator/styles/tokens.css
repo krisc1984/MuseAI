@@ -1,0 +1,55 @@
+.gcg-settings .inline-drawer-content {
+    padding-top: 8px;
+}
+
+.gcg-shell,
+.gcg-about-sheet {
+    --gcg-text: color-mix(in srgb, var(--SmartThemeBodyColor) 94%, white 6%);
+    --gcg-muted: color-mix(in srgb, var(--gcg-text) 54%, transparent);
+    --gcg-border: color-mix(in srgb, var(--SmartThemeBorderColor) 62%, transparent);
+    --gcg-line: color-mix(in srgb, var(--gcg-text) 10%, transparent);
+    --gcg-line-strong: color-mix(in srgb, var(--gcg-text) 16%, transparent);
+    --gcg-surface: color-mix(in srgb, var(--SmartThemeBlurTintColor) 96%, #f5f6f7 4%);
+    --gcg-surface-soft: color-mix(in srgb, var(--SmartThemeChatTintColor, var(--SmartThemeBlurTintColor)) 94%, #eff1f3 6%);
+    --gcg-surface-strong: color-mix(in srgb, var(--gcg-surface-soft) 88%, black 12%);
+    --gcg-accent: color-mix(in srgb, #93a0ae 56%, var(--gcg-text) 44%);
+    --gcg-accent-strong: color-mix(in srgb, #8796a6 64%, var(--gcg-text) 36%);
+    --gcg-accent-soft: color-mix(in srgb, var(--gcg-accent) 12%, transparent);
+    --gcg-ring: color-mix(in srgb, var(--gcg-accent-strong) 14%, transparent);
+    --gcg-error: color-mix(in srgb, #cb7380 78%, var(--gcg-text) 22%);
+    --gcg-control-bg: color-mix(in srgb, var(--gcg-surface-soft) 92%, black 8%);
+    --gcg-control-strong: color-mix(in srgb, var(--gcg-surface) 90%, black 10%);
+    --gcg-serif: 'Chiron GoRound TC VF', 'Yu Mincho', 'Hiragino Mincho ProN', 'Songti SC', Georgia, serif;
+    --gcg-sans: 'Chiron GoRound TC VF', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    color: var(--gcg-text);
+}
+
+.gcg-shell *,
+.gcg-shell *::before,
+.gcg-shell *::after,
+.gcg-about-sheet *,
+.gcg-about-sheet *::before,
+.gcg-about-sheet *::after {
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+[hidden],
+.is-hidden,
+[data-gcg-panel].is-hidden,
+[data-gcg-existing-user].is-hidden,
+[data-gcg-new-user].is-hidden,
+.gcg-persona-menu.is-hidden,
+.gcg-debug-panel.is-hidden {
+    display: none !important;
+}
+
+@keyframes gcg-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}

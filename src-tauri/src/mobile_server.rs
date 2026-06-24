@@ -1003,98 +1003,6 @@ async fn analyze_session_memory<R: Runtime>(
         .unwrap())
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchivePayload {
-    title: String,
-    user_relation_type: Option<String>,
-    user_interaction_model: Option<String>,
-    user_relation_bottom_line: Option<String>,
-    key_events: Option<String>,
-    character_memories: Option<Vec<ArchiveCharacterMemory>>,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchiveCharacterMemory {
-    character_card_id: String,
-    user_relation_type: String,
-    user_interaction_model: String,
-    user_relation_bottom_line: String,
-    key_events: String,
-}
-
-fn apply_archive_payload_to_partner_store(
-    partner_json: &mut Value,
-    card_ids: &[String],
-    payload: &ArchivePayload,
-) -> usize {
-    let character_memories = payload.character_memories.clone().unwrap_or_else(|| {
-        card_ids
-            .iter()
-            .map(|id| ArchiveCharacterMemory {
-                character_card_id: id.clone(),
-                user_relation_type: payload.user_relation_type.clone().unwrap_or_default(),
-                user_interaction_model: payload.user_interaction_model.clone().unwrap_or_default(),
-                user_relation_bottom_line: payload
-                    .user_relation_bottom_line
-                    .clone()
-                    .unwrap_or_default(),
-                key_events: payload.key_events.clone().unwrap_or_default(),
-            })
-            .collect()
-    });
-
-    let mut updated_card_count = 0usize;
-    if let Some(state) = partner_json.get_mut("state") {
-        if let Some(character_cards) = state
-            .get_mut("characterCards")
-            .and_then(|v| v.as_array_mut())
-        {
-            for cc in character_cards.iter_mut() {
-                if let Some(cc_id) = cc.get("id").and_then(|v| v.as_str()) {
-                    if let Some(memory) = character_memories.iter().find(|memory| {
-                        memory.character_card_id == cc_id && card_ids.contains(&cc_id.to_string())
-                    }) {
-                        let name = cc
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        if !cc.get("fields").map(|v| v.is_object()).unwrap_or(false) {
-                            cc["fields"] = json!({});
-                        }
-                        if let Some(fields) = cc.get_mut("fields").and_then(|v| v.as_object_mut()) {
-                            fields.insert(
-                                "userRelationType".to_string(),
-                                Value::String(memory.user_relation_type.clone()),
-                            );
-                            fields.insert(
-                                "userInteractionModel".to_string(),
-                                Value::String(memory.user_interaction_model.clone()),
-                            );
-                            fields.insert(
-                                "userRelationBottomLine".to_string(),
-                                Value::String(memory.user_relation_bottom_line.clone()),
-                            );
-                            fields.insert(
-                                "keyEvents".to_string(),
-                                Value::String(memory.key_events.clone()),
-                            );
-
-                            let fields_val = Value::Object(fields.clone());
-                            let new_content = compile_character_card_markdown(&name, &fields_val);
-                            cc["content"] = Value::String(new_content);
-                            updated_card_count += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    updated_card_count
-}
-
 async fn archive_session_memory<R: Runtime>(
     State(app): State<AppHandle<R>>,
     AxumPath(id): AxumPath<String>,
@@ -1104,75 +1012,15 @@ async fn archive_session_memory<R: Runtime>(
         return Err((StatusCode::FORBIDDEN, "不合法的会话ID".to_string()));
     }
 
-    let payload: ArchivePayload = serde_json::from_str(&body)
+    let payload: crate::agent::sessions::ArchivePayload = serde_json::from_str(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)))?;
 
     let doc_dir = app
         .path()
         .document_dir()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let session_path = doc_dir
-        .join("MuseAI")
-        .join("agent-sessions")
-        .join(format!("{}.json", id));
-    let session_text =
-        fs::read_to_string(&session_path).map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    let mut session: crate::models::AgentSessionRecord = serde_json::from_str(&session_text)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let partner_str = crate::commands::workspace::load_app_state_path(&doc_dir, "partner-store")
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to load partner-store: {}", e),
-            )
-        })?;
-    let mut partner_json: Value = serde_json::from_str(&partner_str).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to parse partner-store: {}", e),
-        )
-    })?;
-
-    let card_ids: Vec<String> = if id.starts_with("partner-session-") {
-        session.character_card_id.clone().into_iter().collect()
-    } else {
-        session.character_card_ids.clone().unwrap_or_default()
-    };
-
-    let updated_card_count =
-        apply_archive_payload_to_partner_store(&mut partner_json, &card_ids, &payload);
-
-    if updated_card_count == 0 {
-        return Err((StatusCode::NOT_FOUND, "未找到需要更新的角色卡".to_string()));
-    }
-
-    let updated_partner_str = serde_json::to_string_pretty(&partner_json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    crate::commands::workspace::save_app_state_path(
-        &doc_dir,
-        "partner-store",
-        &updated_partner_str,
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save partner-store: {}", e),
-        )
-    })?;
-
-    session.title = payload.title.clone();
-    session.is_archived = Some(true);
-    session.saved_at = current_timestamp_millis();
-
-    let session_save_path = doc_dir
-        .join("MuseAI")
-        .join("agent-sessions")
-        .join(format!("{}.json", session.id));
-    let text = serde_json::to_string_pretty(&session)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    fs::write(session_save_path, text)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::agent::sessions::archive_agent_session_at_path(&doc_dir, &id, &payload)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let _ = app.emit("partner-store-updated", ());
 
@@ -1182,125 +1030,40 @@ async fn archive_session_memory<R: Runtime>(
         .unwrap())
 }
 
-fn compile_character_card_markdown(name: &str, fields: &Value) -> String {
-    let get_field = |key: &str| -> String {
-        fields
-            .get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
+async fn export_story_session_markdown_endpoint<R: Runtime>(
+    State(app): State<AppHandle<R>>,
+    AxumPath(id): AxumPath<String>,
+    body: String,
+) -> Result<Response, (StatusCode, String)> {
+    #[derive(Deserialize)]
+    struct ExportPayload {
+        title: Option<String>,
+    }
 
-    let field_line = |label: &str, key: &str| -> Option<String> {
-        let val = get_field(key);
-        if val.trim().is_empty() {
-            None
-        } else {
-            Some(format!("- **{}**：{}", label, val))
-        }
-    };
-
-    let section = |title: &str, lines: Vec<Option<String>>| -> String {
-        let valid: Vec<String> = lines.into_iter().flatten().collect();
-        if valid.is_empty() {
-            String::new()
-        } else {
-            format!("## {}\n{}\n\n", title, valid.join("\n"))
-        }
-    };
-
-    let block_section = |title: &str, key: &str| -> String {
-        let val = get_field(key);
-        if val.trim().is_empty() {
-            String::new()
-        } else {
-            format!("## {}\n{}\n\n", title, val)
-        }
-    };
-
-    let tags_str = if let Some(tags) = fields.get("identityTags").and_then(|v| v.as_array()) {
-        let s: String = tags
-            .iter()
-            .map(|t| format!("`{}`", t.as_str().unwrap_or("")))
-            .collect::<Vec<_>>()
-            .join(" ");
-        if s.trim().is_empty() {
-            String::new()
-        } else {
-            format!("## 身份标签\n{}\n\n", s)
-        }
+    let payload = if body.trim().is_empty() {
+        ExportPayload { title: None }
     } else {
-        String::new()
+        serde_json::from_str::<ExportPayload>(&body)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)))?
     };
 
-    let basic = section(
-        "基础信息",
-        vec![
-            field_line("姓名", "").map(|_| format!("- **姓名**：{}", name)),
-            field_line("年龄", "age"),
-            field_line("性别", "gender"),
-            field_line("种族", "race"),
-            field_line("出生地", "birthplace"),
-            field_line("职业", "occupation"),
-            field_line("社会阶层", "socialClass"),
-        ],
-    );
+    let doc_dir = app
+        .path()
+        .document_dir()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let path = crate::agent::sessions::export_story_session_markdown_at_path(
+        &doc_dir,
+        &id,
+        payload.title.as_deref(),
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    let appearance = section(
-        "外貌气质",
-        vec![
-            field_line("身高体型", "heightBuild"),
-            field_line("标志性特征", "iconicFeatures"),
-            field_line("衣着风格", "clothingStyle"),
-            field_line("整体气质", "overallVibe"),
-        ],
-    );
-
-    let personality = section(
-        "性格特征",
-        vec![
-            field_line("外在性格", "externalPersonality"),
-            field_line("内在性格", "internalPersonality"),
-            field_line("核心欲望", "coreDesire"),
-            field_line("恐惧和弱点", "fearWeakness"),
-            field_line("道德观念", "moralValues"),
-            field_line("怪癖", "quirk"),
-        ],
-    );
-
-    let skills = block_section("技能专长", "skills");
-    let background = block_section("背景故事", "backgroundStory");
-    let relationships = block_section("人际关系", "relationships");
-    let speaking = block_section("说话方式", "speakingStyle");
-    let reactions = block_section("典型反应", "typicalReactions");
-
-    let memory = section(
-        "角色记忆",
-        vec![
-            field_line("与用户关系类型", "userRelationType"),
-            field_line("与用户相处模式", "userInteractionModel"),
-            field_line("与用户关系底线", "userRelationBottomLine"),
-        ],
-    );
-
-    let events = block_section("关键事件", "keyEvents");
-
-    let result = format!(
-        "# 角色卡：{}\n\n{}{}{}{}{}{}{}{}{}{}{}",
-        name,
-        basic,
-        tags_str,
-        appearance,
-        personality,
-        skills,
-        background,
-        relationships,
-        speaking,
-        reactions,
-        memory,
-        events
-    );
-    result.trim().to_string() + "\n"
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_string(&json!({ "path": path })).unwrap(),
+        ))
+        .unwrap())
 }
 
 fn current_timestamp_millis() -> u64 {
@@ -1487,6 +1250,10 @@ pub fn create_mobile_router<R: Runtime>(app_handle: AppHandle<R>) -> Router {
             "/api/mobile/sessions/{id}/archive",
             post(archive_session_memory::<R>),
         )
+        .route(
+            "/api/mobile/sessions/{id}/export-markdown",
+            post(export_story_session_markdown_endpoint::<R>),
+        )
         .route("/api/mobile/chat/start", post(start_run_endpoint::<R>))
         .route("/api/mobile/story/start", post(start_run_endpoint::<R>))
         .route("/api/mobile/chat/stop", post(stop_run_endpoint::<R>))
@@ -1548,6 +1315,9 @@ pub fn get_mobile_service_status() -> Result<MobileServiceStatus, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::sessions::{
+        ArchiveCharacterMemory, ArchivePayload, apply_archive_payload_to_partner_store,
+    };
     use tower::util::ServiceExt;
 
     fn create_mock_app() -> AppHandle<tauri::test::MockRuntime> {

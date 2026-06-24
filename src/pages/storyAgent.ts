@@ -24,6 +24,7 @@ const USER_INFO_LABELS: Record<string, string> = {
   relationships: '人际关系',
   speakingStyle: '说话方式',
   typicalReactions: '典型反应',
+  personaDescription: '用户设定',
 };
 
 export interface StoryCharacterPromptSource {

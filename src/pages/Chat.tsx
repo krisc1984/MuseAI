@@ -157,7 +157,7 @@ const Chat: React.FC = () => {
     contextCompaction, setContextCompaction
   } = usePartnerChatStore();
 
-  const { worldBooks, characterCards, updateItemFields } = usePartnerStore();
+  const { worldBooks, characterCards } = usePartnerStore();
   const settings = useSettingsStore();
 
   const chatHistoryRef = useRef<HTMLDivElement>(null);
@@ -727,26 +727,31 @@ const Chat: React.FC = () => {
     if (!selectedCharacterCard) return;
 
     try {
-      // 1. Update character card fields in usePartnerStore
-      updateItemFields(selectedCharacterCard.id, 'character_card', {
-        userRelationType: editedRelationType,
-        userInteractionModel: editedRelationModel,
-        userRelationBottomLine: editedRelationBottomLine,
-        keyEvents: editedEvents
+      const finalTitle = editedTitle.trim() || '未命名会话';
+      await invoke('archive_agent_session', {
+        sessionId: sessionIdRef.current,
+        payload: {
+          title: finalTitle,
+          userRelationType: editedRelationType,
+          userInteractionModel: editedRelationModel,
+          userRelationBottomLine: editedRelationBottomLine,
+          keyEvents: editedEvents,
+        }
       });
 
-      // 2. Set current session archive status to true
       setIsSessionArchived(true);
-
-      // 3. Set the new session title
-      const finalTitle = editedTitle.trim() || '未命名会话';
       setSessionTitle(finalTitle);
       sessionTitleRef.current = finalTitle;
       isSessionArchivedRef.current = true;
+      await refreshSessions();
 
-      // 4. Update session title on backend and save the session
-      await invoke('update_agent_session_title', { id: sessionIdRef.current, title: finalTitle });
-      await saveCurrentSession();
+      const partnerStoreContent = await invoke<string>('load_app_state', { name: 'partner-store' });
+      if (partnerStoreContent) {
+        const parsed = JSON.parse(partnerStoreContent);
+        if (parsed.state) {
+          usePartnerStore.setState(parsed.state);
+        }
+      }
 
       message.success('伴侣记忆封存成功！当前会话已锁定归档。');
       setIsArchiveModalOpen(false);

@@ -23,16 +23,24 @@ import {
 import { usePartnerStore, PartnerItem, PartnerItemFields, CustomField, normalizePartnerFields } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
+import { save } from '@tauri-apps/plugin-dialog';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildCharacterVisualPrompt, type CharacterVisualImageType } from '../utils/characterVisualPrompt';
 import { DEFAULT_IMAGE_MODEL, generateOpenAIImage } from '../utils/openaiImageGeneration';
+import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import {
   BackgroundExtractionMode,
   CharacterExtractionItem,
   runCharacterExtractionBatch,
   splitCharacterNames,
 } from '../utils/backgroundExtraction';
+import {
+  buildSillyTavernCharacterCard,
+  buildSillyTavernUserPersona,
+  buildSillyTavernWorldbook,
+  mergeUserPersonaFields,
+} from '../utils/sillyTavern';
 
 const DIRECTORY_WIDTH = 280;
 const DEFAULT_BACKGROUND_CANCELLATION_SETTLE_MS = 15_000;
@@ -140,6 +148,7 @@ const Background: React.FC = () => {
     updateCustomField,
     removeCustomField
   } = usePartnerStore();
+  const { userInfo, setUserInfo, selectedUserCharacterCardId } = usePartnerChatStore();
 
   const settings = useSettingsStore();
   const { importGeneratedItems } = usePartnerStore();
@@ -162,6 +171,7 @@ const Background: React.FC = () => {
   const [reviewWorldBookFieldsJson, setReviewWorldBookFieldsJson] = useState('');
   const [reviewCharacterNames, setReviewCharacterNames] = useState('');
   const [characterStatuses, setCharacterStatuses] = useState<CharacterExtractionItem<{ name: string; fields: PartnerItemFields }>[]>([]);
+  const [isGeneratingUserPersona, setIsGeneratingUserPersona] = useState(false);
 
   // Folder Tree States for AI Settings Modal
   interface FileTreeNode {
@@ -192,6 +202,8 @@ const Background: React.FC = () => {
   const [visualReferenceImageName, setVisualReferenceImageName] = useState('');
   const [visualLightboxImage, setVisualLightboxImage] = useState('');
   const [visualLightboxTitle, setVisualLightboxTitle] = useState('');
+  const [isUserPersonaExportModalOpen, setIsUserPersonaExportModalOpen] = useState(false);
+  const [exportUserPersonaCardId, setExportUserPersonaCardId] = useState<string | null>(null);
 
   const generateTaskId = useCallback(() => {
     return 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
@@ -274,6 +286,14 @@ const Background: React.FC = () => {
     }
   }, [isAiModalOpen]);
 
+  useEffect(() => {
+    if (!isUserPersonaExportModalOpen) return;
+    const defaultCardId = selectedUserCharacterCardId && characterCards.some((card) => card.id === selectedUserCharacterCardId)
+      ? selectedUserCharacterCardId
+      : (characterCards[0]?.id || null);
+    setExportUserPersonaCardId(defaultCardId);
+  }, [isUserPersonaExportModalOpen, selectedUserCharacterCardId, characterCards]);
+
   const readSelectedReferenceText = async () => {
     const selectedFileOnlyPaths = selectedFilePaths.filter(path => flatFiles.includes(path));
     if (selectedFileOnlyPaths.length === 0) {
@@ -310,6 +330,82 @@ const Background: React.FC = () => {
       throw new Error('世界书字段 JSON 格式不正确，请检查后再确认');
     }
     return { name, fields };
+  };
+
+  const saveJsonExport = async (defaultPath: string, payload: unknown, successLabel: string) => {
+    const path = await save({
+      defaultPath,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (!path) {
+      return;
+    }
+    await invoke('write_file', {
+      path,
+      content: JSON.stringify(payload, null, 2),
+    });
+    message.success(`${successLabel}已导出到：${path}`);
+  };
+
+  const generateUserPersonaFromText = async (combinedText: string) => {
+    if (!combinedText.trim()) {
+      return;
+    }
+    const taskId = generateTaskId();
+    setIsGeneratingUserPersona(true);
+    try {
+      const result = await invoke<{ fields: PartnerItemFields; userPersona: string }>('generate_background_user_persona', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          text: combinedText,
+          temperature: backgroundCharacterCardConfig.temperature ?? 0.3,
+          maxOutputTokens: backgroundCharacterCardConfig.maxOutputTokens ?? 32000,
+          maxContextTokens: backgroundCharacterCardConfig.maxContextTokens ?? 200000,
+          thinkingDepth: backgroundCharacterCardConfig.thinkingDepth ?? 'off',
+          taskId,
+        },
+      });
+      const normalized = normalizePartnerFields({
+        ...(result.fields || {}),
+        personaDescription: result.userPersona,
+      });
+      setUserInfo((prev) => ({ ...prev, ...normalized }));
+      message.success('用户设定已同步到聊天配置');
+    } catch (err) {
+      console.error('AI 生成用户设定失败:', err);
+      message.error(`AI 提取用户设定失败：${String(err)}`);
+    } finally {
+      setIsGeneratingUserPersona(false);
+    }
+  };
+
+  const handleExportSelectedItem = async (item: PartnerItem) => {
+    if (item.type === 'world_book') {
+      await saveJsonExport(`${item.name}.worldbook.json`, buildSillyTavernWorldbook(item), '世界书');
+      return;
+    }
+
+    const selectedChatWorldBookId = usePartnerChatStore.getState().selectedWorldBookId;
+    const worldName = worldBooks.find((worldBook) => worldBook.id === selectedChatWorldBookId)?.name || '';
+    await saveJsonExport(`${item.name}.character.json`, buildSillyTavernCharacterCard(item, worldName), '角色卡');
+  };
+
+  const handleExportUserPersona = async (cardId: string | null) => {
+    const selectedCard = characterCards.find((card) => card.id === cardId);
+    if (!selectedCard) {
+      message.warning('请先选择一张角色卡来导出用户设定。');
+      return;
+    }
+
+    const mergedFields = normalizePartnerFields(
+      mergeUserPersonaFields(selectedCard.fields || {}, userInfo as PartnerItemFields),
+    );
+    const payload = buildSillyTavernUserPersona(mergedFields);
+    await saveJsonExport(`${payload.name}.persona.json`, payload, '用户设定');
+    setIsUserPersonaExportModalOpen(false);
   };
 
   const waitForBackgroundCancellation = async (taskId: string) => {
@@ -447,6 +543,11 @@ const Background: React.FC = () => {
     const combinedText = await readSelectedReferenceText();
     if (!combinedText) return;
 
+    if (extractionMode === 'user_persona_only') {
+      await generateUserPersonaFromText(combinedText);
+      return;
+    }
+
     if (extractionMode === 'character_cards_only') {
       await runCharacterExtraction(combinedText, undefined, 'new');
       return;
@@ -521,14 +622,16 @@ const Background: React.FC = () => {
       const worldBook = currentWorldBookDraft();
       importGeneratedItems({ worldBooks: [worldBook], characterCards: [] });
 
+      const combinedText = await readSelectedReferenceText();
+      if (!combinedText) return;
+      await generateUserPersonaFromText(combinedText);
+
       if (extractionMode === 'world_book_only') {
         message.success('世界书保存成功！');
         setIsAiModalOpen(false);
         return;
       }
 
-      const combinedText = await readSelectedReferenceText();
-      if (!combinedText) return;
       await runCharacterExtraction(
         combinedText,
         JSON.stringify(worldBook),
@@ -1782,6 +1885,16 @@ const Background: React.FC = () => {
             AI 智能提取
           </Button>
         </div>
+        <div style={{ padding: '8px 20px 0 20px' }}>
+          <Button
+            size="small"
+            onClick={() => setIsUserPersonaExportModalOpen(true)}
+            loading={isGeneratingUserPersona}
+            style={{ width: '100%' }}
+          >
+            导出用户设定 JSON
+          </Button>
+        </div>
 
         {/* Directory Scrollable Area */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
@@ -1923,6 +2036,19 @@ const Background: React.FC = () => {
                     生成角色图
                   </Button>
                 )}
+                <Button
+                  size="small"
+                  onClick={() => void handleExportSelectedItem(selectedItem)}
+                  style={{
+                    color: '#8c5a36',
+                    borderColor: '#ead9c5',
+                    background: '#fffdf9',
+                    borderRadius: 6,
+                    fontWeight: 500
+                  }}
+                >
+                  导出 SillyTavern JSON
+                </Button>
 
                 {/* Mode Toggle Selector */}
                 <Radio.Group 
@@ -2182,6 +2308,7 @@ const Background: React.FC = () => {
                   { label: '提取世界书和角色卡', value: 'world_book_and_character_cards' },
                   { label: '仅提取世界书', value: 'world_book_only' },
                   { label: '仅提取角色卡', value: 'character_cards_only' },
+                  { label: '仅提取用户设定', value: 'user_persona_only' },
                 ]}
               />
             </div>
@@ -2499,6 +2626,31 @@ const Background: React.FC = () => {
             style={{ width: '100%', maxHeight: '75vh', objectFit: 'contain', borderRadius: 8, background: '#faf9f5' }}
           />
         )}
+      </Modal>
+
+      <Modal
+        title="选择角色卡导出用户设定"
+        open={isUserPersonaExportModalOpen}
+        onCancel={() => setIsUserPersonaExportModalOpen(false)}
+        onOk={() => void handleExportUserPersona(exportUserPersonaCardId)}
+        okText="导出用户设定 JSON"
+        cancelText="取消"
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ color: '#8c8882', fontSize: 13, lineHeight: 1.6 }}>
+            请选择一张角色卡作为用户人设来源。导出时会优先使用该角色卡字段，再用当前聊天配置中的手动用户设定补齐缺失内容。
+          </div>
+          <Select
+            placeholder="选择角色卡"
+            value={exportUserPersonaCardId}
+            onChange={setExportUserPersonaCardId}
+            options={characterCards.map((card) => ({
+              label: card.name,
+              value: card.id,
+            }))}
+            style={{ width: '100%' }}
+          />
+        </div>
       </Modal>
 
       <Modal

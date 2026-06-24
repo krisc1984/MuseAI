@@ -58,6 +58,7 @@ export interface AgentSessionRecord extends AgentSessionSummary {
   messages: Message[];
   selectedReferenceFiles: string[];
   selectedOutlineFile?: string | null;
+  selectedWorkFile?: string | null;
   todos: AgentTodo[];
   contextCompaction?: SessionContextCompaction | null;
   isArchived?: boolean;

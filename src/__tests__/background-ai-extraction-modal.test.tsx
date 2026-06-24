@@ -3,12 +3,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Background from '../pages/Background';
 import { usePartnerStore } from '../stores/usePartnerStore';
+import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 
 const invokeMock = vi.mocked(invoke);
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
+}));
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  save: vi.fn(async () => null),
 }));
 
 const filePath = '/Users/test/Documents/MuseAI/articles/chapter.md';
@@ -19,6 +24,12 @@ function resetStores() {
     characterCards: [],
     selectedId: null,
     selectedType: null,
+  });
+  usePartnerChatStore.setState({
+    userInfo: {},
+    selectedWorldBookId: null,
+    selectedCharacterCardId: null,
+    selectedUserCharacterCardId: null,
   });
   useSettingsStore.setState({
     llmApiKey: 'key',
@@ -87,6 +98,16 @@ function mockWorkspaceInvoke() {
           gender: '未知',
           backgroundStory: `${args.request.characterName}的背景`,
         },
+      };
+    }
+    if (command === 'generate_background_user_persona') {
+      return {
+        fields: {
+          name: '顾迟',
+          backgroundStory: '来自边境的小镇调查员',
+          externalPersonality: '沉稳冷静',
+        },
+        userPersona: '[身份与处境]\n边境调查员\n\n[与角色相关的气质]\n沉稳冷静',
       };
     }
     return undefined;
@@ -325,6 +346,29 @@ describe('Background AI extraction modal', () => {
     const cards = usePartnerStore.getState().characterCards;
     expect(cards.map((card) => card.name)).toEqual(['林逸', '陆雪莹']);
     expect(invokeMock).not.toHaveBeenCalledWith('generate_background_stage_one', expect.anything());
+  });
+
+  it('runs user-persona-only mode and writes into partner chat user info', async () => {
+    await openModal();
+
+    fireEvent.click(screen.getByText('仅提取用户设定'));
+    await checkArticleFile();
+
+    fireEvent.click(screen.getByRole('button', { name: '开始智能提取' }));
+
+    await waitFor(() => {
+      expect(usePartnerStore.getState().worldBooks).toHaveLength(0);
+      expect(usePartnerStore.getState().characterCards).toHaveLength(0);
+      expect(usePartnerChatStore.getState().userInfo.personaDescription).toContain('边境调查员');
+    });
+    expect(invokeMock).toHaveBeenCalledWith(
+      'generate_background_user_persona',
+      expect.objectContaining({
+        request: expect.objectContaining({
+          text: expect.stringContaining('林逸和陆雪莹'),
+        }),
+      }),
+    );
   });
 
   it('lets users expand failed character cards to inspect failure details', async () => {

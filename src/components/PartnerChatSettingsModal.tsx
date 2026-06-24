@@ -84,7 +84,8 @@ export const PartnerChatSettingsModal: React.FC<PartnerChatSettingsModalProps> =
       backgroundStory: '',
       relationships: '',
       speakingStyle: '',
-      typicalReactions: ''
+      typicalReactions: '',
+      personaDescription: ''
     };
 
     form.setFieldsValue(clearedFields);
@@ -259,6 +260,9 @@ export const PartnerChatSettingsModal: React.FC<PartnerChatSettingsModalProps> =
               </Form.Item>
               <Form.Item label="典型反应" name="typicalReactions">
                 <TextArea rows={2} placeholder="例如: 面对挑衅会一笑置之，危机时非常可靠" />
+              </Form.Item>
+              <Form.Item label="SillyTavern 用户设定 / 轮廓描述" name="personaDescription">
+                <TextArea rows={4} placeholder="可选。用于保存或导出更贴近 SillyTavern persona 的用户设定文本。" />
               </Form.Item>
             </Panel>
           </Collapse>

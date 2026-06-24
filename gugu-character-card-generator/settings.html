@@ -1,0 +1,199 @@
+<div id="gcg_panel" class="gcg-settings inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+        <b>咕咕助手 - 角色卡生成器</b>
+        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+
+    <div class="inline-drawer-content">
+        <div class="gcg-shell">
+            <section class="gcg-card gcg-api-card">
+                <div class="gcg-card-head">
+                    <div class="gcg-card-title">API</div>
+                    <div class="gcg-card-head-actions">
+                        <label class="gcg-switch-field" for="gcg_stream_enabled">
+                            <span class="gcg-switch-label">流式</span>
+                            <span class="gcg-switch">
+                                <input id="gcg_stream_enabled" type="checkbox">
+                                <span class="gcg-switch-track" aria-hidden="true"></span>
+                            </span>
+                        </label>
+                        <button id="gcg_about" class="menu_button gcg-icon-button" type="button" title="关于">
+                            <i class="fa-solid fa-circle-info"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="gcg-profile-toolbar">
+                    <select id="gcg_private_profile_select" class="text_pole"></select>
+                    <div class="gcg-action-group">
+                        <button id="gcg_profile_new" class="menu_button gcg-action-button" type="button">新建</button>
+                        <button id="gcg_profile_save" class="menu_button gcg-action-button" type="button">保存</button>
+                        <button id="gcg_profile_delete" class="menu_button gcg-action-button" type="button">删除</button>
+                    </div>
+                </div>
+
+                <div class="gcg-api-grid">
+                    <div class="gcg-api-primary-row">
+                        <label class="gcg-field">
+                            <span class="gcg-label">格式 <span class="gcg-required">＊</span></span>
+                            <select id="gcg_profile_api_format" class="text_pole">
+                                <option value="openai">OpenAI 兼容</option>
+                                <option value="gemini">Google Gemini</option>
+                            </select>
+                        </label>
+
+                        <label class="gcg-field">
+                            <span class="gcg-label">配置名 <span class="gcg-required">＊</span></span>
+                            <input id="gcg_profile_name" class="text_pole" placeholder="角色卡专用">
+                        </label>
+
+                        <label class="gcg-field">
+                            <span class="gcg-label">API Key <span class="gcg-required">＊</span></span>
+                            <input id="gcg_profile_api_key" class="text_pole" type="password">
+                        </label>
+                    </div>
+
+                    <div class="gcg-api-secondary-row">
+                        <div class="gcg-field gcg-model-field">
+                            <span class="gcg-label">模型 <span class="gcg-required">＊</span></span>
+                            <div class="gcg-inline-control">
+                                <input id="gcg_profile_model" class="text_pole" placeholder="gemini-3.1-pro-preview">
+                                <button id="gcg_profile_fetch_models" class="menu_button gcg-action-button gcg-inline-button" type="button">拉取</button>
+                            </div>
+                            <select id="gcg_profile_model_list" class="text_pole is-hidden">
+                                <option value="">选择已拉取的模型</option>
+                            </select>
+                        </div>
+
+                        <div class="gcg-field gcg-base-url-field">
+                            <span class="gcg-label">Base URL <span class="gcg-required">＊</span></span>
+                            <div class="gcg-inline-control">
+                                <input id="gcg_profile_base_url" class="text_pole">
+                                <button id="gcg_profile_base_url_reset" class="menu_button gcg-action-button gcg-inline-button is-hidden" type="button">重置</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="gcg-card gcg-generator-card">
+                <div class="gcg-tab-row" role="tablist" aria-label="生成模式">
+                    <button id="gcg_tab_character" class="menu_button gcg-tab-button" type="button" data-gcg-tab="character" role="tab" aria-controls="gcg_panel_character" aria-selected="true">生成角色卡</button>
+                    <button id="gcg_tab_worldbook" class="menu_button gcg-tab-button" type="button" data-gcg-tab="worldbook" role="tab" aria-controls="gcg_panel_worldbook" aria-selected="false">生成世界书</button>
+                    <button id="gcg_tab_user" class="menu_button gcg-tab-button" type="button" data-gcg-tab="user" role="tab" aria-controls="gcg_panel_user" aria-selected="false">生成用户设定</button>
+                </div>
+
+                <div class="gcg-tab-panels">
+                    <div id="gcg_panel_character" class="gcg-tab-panel" data-gcg-panel="character" role="tabpanel" aria-labelledby="gcg_tab_character">
+                        <div class="gcg-card-head">
+                            <div class="gcg-card-title">角色</div>
+                        </div>
+
+                        <div class="gcg-stack">
+                            <label class="gcg-field">
+                                <span class="gcg-label">角色名</span>
+                                <input id="gcg_name" class="text_pole" data-gcg-draft placeholder="可留空">
+                            </label>
+
+                            <label class="gcg-field">
+                                <span class="gcg-label">角色简介 <span class="gcg-required">＊</span></span>
+                                <textarea id="gcg_concept" class="text_pole gcg-textarea" data-gcg-draft placeholder="简单介绍一下角色"></textarea>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="gcg_panel_worldbook" class="gcg-tab-panel is-hidden" data-gcg-panel="worldbook" role="tabpanel" aria-labelledby="gcg_tab_worldbook">
+                        <div class="gcg-card-head">
+                            <div class="gcg-card-title">当前角色</div>
+                        </div>
+                        <div class="gcg-current-character">
+                            <div class="gcg-current-topline">
+                                <div class="gcg-current-name" data-gcg-active-name>未选择角色</div>
+                                <div class="gcg-current-worldbook" data-gcg-worldbook-status>未绑定世界书</div>
+                            </div>
+                            <div class="gcg-current-summary" data-gcg-active-summary>请先在酒馆中选中一个角色。</div>
+                            <div class="gcg-current-meta">世界书：<span data-gcg-worldbook-name>未绑定</span></div>
+                            <div class="gcg-current-actions">
+                                <button data-gcg-open-character class="menu_button gcg-action-button" type="button">打开角色</button>
+                                <button data-gcg-open-worldbook class="menu_button gcg-action-button" type="button">打开世界书</button>
+                            </div>
+                        </div>
+
+                        <label class="gcg-field">
+                            <span class="gcg-label">世界书要求</span>
+                            <textarea id="gcg_worldbook_prompt" class="text_pole gcg-textarea" data-gcg-draft placeholder="可留空"></textarea>
+                        </label>
+                    </div>
+
+                    <div id="gcg_panel_user" class="gcg-tab-panel is-hidden" data-gcg-panel="user" role="tabpanel" aria-labelledby="gcg_tab_user">
+                        <div class="gcg-card-head">
+                            <div class="gcg-card-title">当前角色</div>
+                        </div>
+                        <div class="gcg-current-character">
+                            <div class="gcg-current-topline">
+                                <div class="gcg-current-name" data-gcg-active-name>未选择角色</div>
+                                <div class="gcg-current-worldbook" data-gcg-persona-status>未绑定用户设定</div>
+                            </div>
+                            <div class="gcg-current-summary" data-gcg-active-summary>请先在酒馆中选中一个角色。</div>
+                            <div class="gcg-current-meta">用户设定：<span data-gcg-persona-name>未绑定</span></div>
+                            <div class="gcg-current-actions">
+                                <button data-gcg-open-character class="menu_button gcg-action-button" type="button">打开角色</button>
+                                <button data-gcg-open-persona class="menu_button gcg-action-button" type="button">打开用户设定</button>
+                            </div>
+                        </div>
+
+                        <div class="gcg-card-head">
+                            <div class="gcg-card-title">用户设定</div>
+                        </div>
+
+                        <div class="gcg-stack">
+                            <label class="gcg-field">
+                                <span class="gcg-label">你是谁 <span class="gcg-required">＊</span></span>
+                                <input id="gcg_user_name" class="text_pole" data-gcg-draft placeholder="你的名字">
+                            </label>
+
+                            <label class="gcg-field">
+                                <span class="gcg-label">用户简洁 <span class="gcg-required">＊</span></span>
+                                <textarea id="gcg_user_description" class="text_pole gcg-textarea" data-gcg-draft placeholder="简单介绍一下你自己"></textarea>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="gcg-submit-row">
+                    <div id="gcg_status" class="gcg-status">
+                        <span class="gcg-status-spinner" aria-hidden="true"></span>
+                        <span id="gcg_status_text" class="gcg-status-text">待命</span>
+                        <span id="gcg_status_timer" class="gcg-status-timer">00:00</span>
+                    </div>
+                    <button id="gcg_generate" class="menu_button gcg-primary-button" type="button">生成角色卡</button>
+                </div>
+
+                <div class="gcg-debug-block">
+                    <button
+                        id="gcg_debug_toggle"
+                        class="menu_button gcg-debug-toggle"
+                        type="button"
+                        aria-expanded="false"
+                        aria-controls="gcg_debug_panel"
+                    >
+                        <span class="gcg-debug-toggle-copy">
+                            <span class="gcg-card-title">调试</span>
+                            <span id="gcg_debug_toggle_status" class="gcg-debug-toggle-status">暂无调试数据</span>
+                        </span>
+                        <i class="fa-solid fa-chevron-down gcg-debug-toggle-icon"></i>
+                    </button>
+                    <div id="gcg_debug_panel" class="gcg-debug-panel is-hidden">
+                        <div class="gcg-debug-body">
+                            <div id="gcg_debug_status" class="gcg-debug-status">暂无调试数据</div>
+                            <div class="gcg-debug-actions">
+                                <button id="gcg_copy_debug_request" class="menu_button gcg-action-button is-hidden" type="button" aria-hidden="true">复制原始请求</button>
+                                <button id="gcg_copy_debug_response" class="menu_button gcg-action-button" type="button">复制原始回应</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>

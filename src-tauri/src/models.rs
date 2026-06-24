@@ -151,6 +151,8 @@ pub struct AgentSessionRecord {
     pub messages: Vec<AgentSessionMessage>,
     pub selected_reference_files: Vec<String>,
     pub selected_outline_file: Option<String>,
+    #[serde(default)]
+    pub selected_work_file: Option<String>,
     pub todos: Vec<AgentSessionTodo>,
     pub context_compaction: Option<SessionContextCompaction>,
     pub is_archived: Option<bool>,
@@ -246,6 +248,21 @@ pub struct GenerateBackgroundCharacterCardRequest {
     pub task_id: String,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBackgroundUserPersonaRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub text: String,
+    pub temperature: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    pub max_context_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
+    pub task_id: String,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneratedBackgroundItem {
@@ -258,6 +275,13 @@ pub struct GeneratedBackgroundItem {
 pub struct BackgroundStageOneResponse {
     pub world_books: Vec<GeneratedBackgroundItem>,
     pub character_names: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedBackgroundUserPersona {
+    pub fields: Value,
+    pub user_persona: String,
 }
 
 #[derive(Clone, Deserialize)]

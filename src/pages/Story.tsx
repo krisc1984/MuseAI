@@ -15,7 +15,8 @@ import {
   ExperimentOutlined,
   BranchesOutlined,
   RedoOutlined,
-  EditOutlined
+  EditOutlined,
+  SaveOutlined
 } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -26,6 +27,7 @@ import { useSettingsStore } from '../stores/useSettingsStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
+import { useWorksStore } from '../stores/useWorksStore';
 import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
 import {
   buildStoryModelMessages,
@@ -80,8 +82,9 @@ const Story: React.FC = () => {
     createNewSession
   } = useStoryStore();
 
-  const { worldBooks, characterCards, updateItemFields, selectItem } = usePartnerStore();
+  const { worldBooks, characterCards, selectItem } = usePartnerStore();
   const { userInfo: partnerChatUserInfo } = usePartnerChatStore();
+  const selectedWorkFile = useWorksStore((state) => state.selectedFile);
   const settings = useSettingsStore();
 
   const chatHistoryRef = useRef<HTMLDivElement>(null);
@@ -652,6 +655,7 @@ const Story: React.FC = () => {
           messages: messagesRef.current,
           selectedReferenceFiles: [],
           selectedOutlineFile: null,
+          selectedWorkFile,
           todos: [],
           contextCompaction: contextCompactionRef.current,
           isArchived: isSessionArchivedRef.current,
@@ -803,37 +807,63 @@ const Story: React.FC = () => {
 
   const handleConfirmArchive = async () => {
     try {
-      // 1. Update all character card fields
       const filteredCards = selectedCards.filter(c => tempSelectedCardIds.includes(c.id));
-      for (const card of filteredCards) {
-        const relationType = editedRelationTypes[card.id] || '';
-        const relationModel = editedRelationModels[card.id] || '';
-        const relationBottomLine = editedRelationBottomLines[card.id] || '';
-        const events = editedEventsMap[card.id] || '';
-        updateItemFields(card.id, 'character_card', {
-          userRelationType: relationType,
-          userInteractionModel: relationModel,
-          userRelationBottomLine: relationBottomLine,
-          keyEvents: events
-        });
-      }
-
-      // 2. Archive session state
-      setIsSessionArchived(true);
       const finalTitle = editedTitle.trim() || '未命名故事';
+      await invoke('archive_agent_session', {
+        sessionId: sessionIdRef.current,
+        payload: {
+          title: finalTitle,
+          characterMemories: filteredCards.map((card) => ({
+            characterCardId: card.id,
+            userRelationType: editedRelationTypes[card.id] || '',
+            userInteractionModel: editedRelationModels[card.id] || '',
+            userRelationBottomLine: editedRelationBottomLines[card.id] || '',
+            keyEvents: editedEventsMap[card.id] || '',
+          })),
+        }
+      });
+
+      setIsSessionArchived(true);
       setSessionTitle(finalTitle);
       sessionTitleRef.current = finalTitle;
       isSessionArchivedRef.current = true;
+      await refreshSessions();
 
-      // 3. Update backend session title and persist
-      await invoke('update_agent_session_title', { id: sessionIdRef.current, title: finalTitle });
-      await saveCurrentSession();
+      const partnerStoreContent = await invoke<string>('load_app_state', { name: 'partner-store' });
+      if (partnerStoreContent) {
+        const parsed = JSON.parse(partnerStoreContent);
+        if (parsed.state) {
+          usePartnerStore.setState(parsed.state);
+        }
+      }
 
-      message.success('冒险记忆成功封存到选中的角色卡！本局会话已锁定归档。');
+      message.success('冒险记忆已封存，角色记忆同步完成。');
       setIsArchiveModalOpen(false);
     } catch (err) {
       console.error('封存故事记忆失败:', err);
       message.error(`封存故事记忆失败：${String(err)}`);
+    }
+  };
+
+  const handleExportStoryArchive = async () => {
+    if (messages.length === 0) {
+      message.warning('当前还没有可导出的剧情内容');
+      return;
+    }
+
+    try {
+      const result = await invoke<string | { path?: string }>('export_story_session_markdown', {
+        sessionId: sessionIdRef.current,
+        title: sessionTitleRef.current,
+      });
+      const path = typeof result === 'string' ? result : result?.path;
+      if (!path) {
+        throw new Error('未返回导出路径');
+      }
+      message.success(`剧情存档已导出：${path}`);
+    } catch (err) {
+      console.error('导出剧情存档失败:', err);
+      message.error(`导出剧情存档失败：${String(err)}`);
     }
   };
 
@@ -1096,6 +1126,25 @@ const Story: React.FC = () => {
               </Button>
             </Tooltip>
           )}
+
+          <Tooltip title="导出当前剧情为 Markdown 存档">
+            <Button
+              type="text"
+              disabled={messages.length === 0}
+              icon={<SaveOutlined />}
+              onClick={handleExportStoryArchive}
+              style={{
+                color: messages.length === 0 ? '#8c8882' : '#d97757',
+                fontWeight: 500,
+                fontSize: 13,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4
+              }}
+            >
+              导出剧情存档
+            </Button>
+          </Tooltip>
 
           <Tooltip title="重开新冒险">
             <Button type="text" icon={<ReloadOutlined />} onClick={createNewSession} />

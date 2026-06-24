@@ -15,6 +15,27 @@ use crate::models::*;
 use crate::utils::*;
 use crate::ActiveStreams;
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivePayload {
+    pub title: String,
+    pub user_relation_type: Option<String>,
+    pub user_interaction_model: Option<String>,
+    pub user_relation_bottom_line: Option<String>,
+    pub key_events: Option<String>,
+    pub character_memories: Option<Vec<ArchiveCharacterMemory>>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveCharacterMemory {
+    pub character_card_id: String,
+    pub user_relation_type: String,
+    pub user_interaction_model: String,
+    pub user_relation_bottom_line: String,
+    pub key_events: String,
+}
+
 struct BackgroundTaskTokens {
     tokens: Vec<Arc<AtomicBool>>,
     active_count: Arc<AtomicUsize>,
@@ -165,6 +186,485 @@ pub fn save_agent_session(
         selected_world_book_id: session.selected_world_book_id,
         dynamic_role_loading_enabled: session.dynamic_role_loading_enabled,
     })
+}
+
+pub(crate) fn apply_archive_payload_to_partner_store(
+    partner_json: &mut Value,
+    card_ids: &[String],
+    payload: &ArchivePayload,
+) -> usize {
+    let character_memories = payload.character_memories.clone().unwrap_or_else(|| {
+        card_ids
+            .iter()
+            .map(|id| ArchiveCharacterMemory {
+                character_card_id: id.clone(),
+                user_relation_type: payload.user_relation_type.clone().unwrap_or_default(),
+                user_interaction_model: payload.user_interaction_model.clone().unwrap_or_default(),
+                user_relation_bottom_line: payload
+                    .user_relation_bottom_line
+                    .clone()
+                    .unwrap_or_default(),
+                key_events: payload.key_events.clone().unwrap_or_default(),
+            })
+            .collect()
+    });
+
+    let mut updated_card_count = 0usize;
+    if let Some(state) = partner_json.get_mut("state") {
+        if let Some(character_cards) = state
+            .get_mut("characterCards")
+            .and_then(|v| v.as_array_mut())
+        {
+            for cc in character_cards.iter_mut() {
+                if let Some(cc_id) = cc.get("id").and_then(|v| v.as_str()) {
+                    if let Some(memory) = character_memories.iter().find(|memory| {
+                        memory.character_card_id == cc_id && card_ids.iter().any(|id| id == cc_id)
+                    }) {
+                        let name = cc
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !cc.get("fields").map(|v| v.is_object()).unwrap_or(false) {
+                            cc["fields"] = json!({});
+                        }
+                        if let Some(fields) = cc.get_mut("fields").and_then(|v| v.as_object_mut()) {
+                            fields.insert(
+                                "userRelationType".to_string(),
+                                Value::String(memory.user_relation_type.clone()),
+                            );
+                            fields.insert(
+                                "userInteractionModel".to_string(),
+                                Value::String(memory.user_interaction_model.clone()),
+                            );
+                            fields.insert(
+                                "userRelationBottomLine".to_string(),
+                                Value::String(memory.user_relation_bottom_line.clone()),
+                            );
+                            fields.insert(
+                                "keyEvents".to_string(),
+                                Value::String(memory.key_events.clone()),
+                            );
+
+                            let fields_val = Value::Object(fields.clone());
+                            let new_content = compile_character_card_markdown(&name, &fields_val);
+                            cc["content"] = Value::String(new_content);
+                            updated_card_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    updated_card_count
+}
+
+fn clean_archive_text(content: &str) -> String {
+    let thinking_re = regex::Regex::new(r"\[\[THINKING:[^\]]+\]\]").unwrap();
+    let tool_re = regex::Regex::new(r"\[\[TOOL:[^\]]+\]\]").unwrap();
+    tool_re
+        .replace_all(&thinking_re.replace_all(content, ""), "")
+        .trim()
+        .to_string()
+}
+
+fn compile_character_card_markdown(name: &str, fields: &Value) -> String {
+    let get_field = |key: &str| -> String {
+        fields
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
+    let field_line = |label: &str, key: &str| -> Option<String> {
+        let val = get_field(key);
+        if val.trim().is_empty() {
+            None
+        } else {
+            Some(format!("- **{}**：{}", label, val))
+        }
+    };
+
+    let section = |title: &str, lines: Vec<Option<String>>| -> String {
+        let valid: Vec<String> = lines.into_iter().flatten().collect();
+        if valid.is_empty() {
+            String::new()
+        } else {
+            format!("## {}\n{}\n\n", title, valid.join("\n"))
+        }
+    };
+
+    let block_section = |title: &str, key: &str| -> String {
+        let val = get_field(key);
+        if val.trim().is_empty() {
+            String::new()
+        } else {
+            format!("## {}\n{}\n\n", title, val)
+        }
+    };
+
+    let tags_str = if let Some(tags) = fields.get("identityTags").and_then(|v| v.as_array()) {
+        let s = tags
+            .iter()
+            .map(|t| format!("`{}`", t.as_str().unwrap_or("")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if s.trim().is_empty() {
+            String::new()
+        } else {
+            format!("## 身份标签\n{}\n\n", s)
+        }
+    } else {
+        String::new()
+    };
+
+    let basic = section(
+        "基础信息",
+        vec![
+            Some(format!("- **姓名**：{}", name)),
+            field_line("年龄", "age"),
+            field_line("性别", "gender"),
+            field_line("种族", "race"),
+            field_line("出生地", "birthplace"),
+            field_line("职业", "occupation"),
+            field_line("社会阶层", "socialClass"),
+        ],
+    );
+
+    let appearance = section(
+        "外貌气质",
+        vec![
+            field_line("身高体型", "heightBuild"),
+            field_line("标志性特征", "iconicFeatures"),
+            field_line("衣着风格", "clothingStyle"),
+            field_line("整体气质", "overallVibe"),
+        ],
+    );
+
+    let personality = section(
+        "性格特征",
+        vec![
+            field_line("外在性格", "externalPersonality"),
+            field_line("内在性格", "internalPersonality"),
+            field_line("核心欲望", "coreDesire"),
+            field_line("恐惧和弱点", "fearWeakness"),
+            field_line("道德观念", "moralValues"),
+            field_line("怪癖", "quirk"),
+        ],
+    );
+
+    let skills = block_section("技能专长", "skills");
+    let background = block_section("背景故事", "backgroundStory");
+    let relationships = block_section("人际关系", "relationships");
+    let speaking = block_section("说话方式", "speakingStyle");
+    let reactions = block_section("典型反应", "typicalReactions");
+    let memory = section(
+        "角色记忆",
+        vec![
+            field_line("与用户关系类型", "userRelationType"),
+            field_line("与用户相处模式", "userInteractionModel"),
+            field_line("与用户关系底线", "userRelationBottomLine"),
+        ],
+    );
+    let events = block_section("关键事件", "keyEvents");
+
+    format!(
+        "# 角色卡：{}\n\n{}{}{}{}{}{}{}{}{}{}{}",
+        name,
+        basic,
+        tags_str,
+        appearance,
+        personality,
+        skills,
+        background,
+        relationships,
+        speaking,
+        reactions,
+        memory,
+        events
+    )
+    .trim()
+    .to_string()
+        + "\n"
+}
+
+fn sanitize_archive_file_stem(input: &str) -> String {
+    let mut result = String::new();
+    let mut prev_dash = false;
+    for ch in input.chars() {
+        let safe = match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => Some(ch.to_ascii_lowercase()),
+            '\u{4e00}'..='\u{9fff}' => Some(ch),
+            ' ' | '-' | '_' => Some('-'),
+            _ => None,
+        };
+        if let Some(ch) = safe {
+            if ch == '-' {
+                if prev_dash || result.is_empty() {
+                    continue;
+                }
+                prev_dash = true;
+            } else {
+                prev_dash = false;
+            }
+            result.push(ch);
+        }
+    }
+    result.trim_matches('-').chars().take(48).collect()
+}
+
+fn archive_sender_name(session: &AgentSessionRecord, role: &str, character_names: &[String]) -> String {
+    if role == "user" {
+        "我".to_string()
+    } else if session.id.starts_with("story-session-") {
+        if character_names.is_empty() {
+            "故事旁白与NPC".to_string()
+        } else {
+            format!("故事旁白与NPC（{}）", character_names.join("、"))
+        }
+    } else if let Some(first) = character_names.first() {
+        first.clone()
+    } else {
+        "AI伴侣".to_string()
+    }
+}
+
+fn build_story_export_markdown(
+    session: &AgentSessionRecord,
+    title: &str,
+    character_names: &[String],
+) -> String {
+    let exported_at = chrono::Local::now();
+    let mut lines = vec![
+        format!("# {}", title.trim()),
+        String::new(),
+        "- **存档类型**：剧情存档".to_string(),
+        format!("- **导出时间**：{}", exported_at.format("%Y-%m-%d %H:%M:%S")),
+        format!("- **会话 ID**：`{}`", session.id),
+    ];
+
+    if !character_names.is_empty() {
+        lines.push(format!("- **参与角色**：{}", character_names.join("、")));
+    }
+
+    lines.push(String::new());
+    lines.push("## 剧情记录".to_string());
+    lines.push(String::new());
+
+    for message in &session.messages {
+        let body = clean_archive_text(&message.content);
+        if body.is_empty() && message.tools.as_ref().map(|tools| tools.is_empty()).unwrap_or(true) {
+            continue;
+        }
+
+        lines.push(format!(
+            "### {}",
+            archive_sender_name(session, &message.role, character_names)
+        ));
+        if !body.is_empty() {
+            lines.push(body);
+        }
+
+        if let Some(tools) = message.tools.as_ref() {
+            for tool in tools {
+                let result = tool.result.trim();
+                if result.is_empty() {
+                    continue;
+                }
+                lines.push(String::new());
+                lines.push(format!(
+                    "> [工具 {}] {}",
+                    tool.name,
+                    result.replace('\n', "\n> ")
+                ));
+            }
+        }
+
+        lines.push(String::new());
+    }
+
+    lines.join("\n").trim().to_string() + "\n"
+}
+
+fn write_story_export_markdown(
+    doc_dir: &Path,
+    session: &AgentSessionRecord,
+    title: &str,
+    character_name_map: &HashMap<String, String>,
+) -> Result<String, String> {
+    let exports_dir = story_export_dir(doc_dir, session)?;
+    fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
+
+    let character_names = character_name_map.values().cloned().collect::<Vec<_>>();
+    let file_stem = sanitize_archive_file_stem(title);
+    let base_name = if file_stem.is_empty() {
+        session.id.clone()
+    } else {
+        format!("{}-{}", archived_time_slug(), file_stem)
+    };
+    let path = exports_dir.join(format!("{}.md", base_name));
+    let markdown = build_story_export_markdown(session, title, &character_names);
+    fs::write(&path, markdown).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn story_export_dir(doc_dir: &Path, session: &AgentSessionRecord) -> Result<PathBuf, String> {
+    let articles_dir = doc_dir.join("MuseAI").join("articles");
+    let Some(work_file) = session
+        .selected_work_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(articles_dir);
+    };
+
+    let work_path = PathBuf::from(work_file);
+    let canonical_articles = articles_dir.canonicalize().unwrap_or(articles_dir.clone());
+    let canonical_work = work_path.canonicalize().unwrap_or(work_path);
+    if !canonical_work.starts_with(&canonical_articles) {
+        return Ok(articles_dir);
+    }
+
+    Ok(canonical_work
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or(canonical_articles))
+}
+
+fn archived_time_slug() -> String {
+    chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
+}
+
+fn load_session_character_name_map(
+    partner_json: &Value,
+    card_ids: &[String],
+) -> HashMap<String, String> {
+    let mut character_name_map = HashMap::new();
+    if let Some(cards) = partner_json
+        .get("state")
+        .and_then(|state| state.get("characterCards"))
+        .and_then(|cards| cards.as_array())
+    {
+        for card in cards {
+            let Some(card_id) = card.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if !card_ids.iter().any(|id| id == card_id) {
+                continue;
+            }
+            let name = card
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(card_id)
+                .to_string();
+            character_name_map.insert(card_id.to_string(), name);
+        }
+    }
+    character_name_map
+}
+
+pub fn archive_agent_session_at_path(
+    doc_dir: &Path,
+    session_id: &str,
+    payload: &ArchivePayload,
+) -> Result<AgentSessionRecord, String> {
+    let session_path = doc_dir
+        .join("MuseAI")
+        .join("agent-sessions")
+        .join(format!("{}.json", session_id));
+    let session_text = fs::read_to_string(&session_path).map_err(|e| e.to_string())?;
+    let mut session: AgentSessionRecord =
+        serde_json::from_str(&session_text).map_err(|e| e.to_string())?;
+
+    let partner_str = crate::commands::workspace::load_app_state_path(doc_dir, "partner-store")?;
+    let mut partner_json: Value = serde_json::from_str(&partner_str).map_err(|e| e.to_string())?;
+
+    let card_ids: Vec<String> = if session.id.starts_with("partner-session-") {
+        session.character_card_id.clone().into_iter().collect()
+    } else {
+        session.character_card_ids.clone().unwrap_or_default()
+    };
+    let updated_card_count =
+        apply_archive_payload_to_partner_store(&mut partner_json, &card_ids, payload);
+    if updated_card_count == 0 {
+        return Err("未找到需要更新的角色卡".to_string());
+    }
+
+    let updated_partner_str =
+        serde_json::to_string_pretty(&partner_json).map_err(|e| e.to_string())?;
+    crate::commands::workspace::save_app_state_path(doc_dir, "partner-store", &updated_partner_str)?;
+
+    session.title = payload.title.clone();
+    session.is_archived = Some(true);
+    session.saved_at = now_millis()?;
+
+    let session_save_path = doc_dir
+        .join("MuseAI")
+        .join("agent-sessions")
+        .join(format!("{}.json", session.id));
+    let text = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
+    fs::write(session_save_path, text).map_err(|e| e.to_string())?;
+
+    Ok(session)
+}
+
+#[tauri::command]
+pub fn archive_agent_session(
+    app: AppHandle,
+    session_id: String,
+    payload: ArchivePayload,
+) -> Result<(), String> {
+    if !session_id.starts_with("partner-session-") && !session_id.starts_with("story-session-") {
+        return Err("不合法的会话ID".to_string());
+    }
+    let doc_dir = app.path().document_dir().map_err(|e| e.to_string())?;
+    archive_agent_session_at_path(&doc_dir, &session_id, &payload)?;
+    let _ = app.emit("partner-store-updated", ());
+    Ok(())
+}
+
+pub fn export_story_session_markdown_at_path(
+    doc_dir: &Path,
+    session_id: &str,
+    title_override: Option<&str>,
+) -> Result<String, String> {
+    if !session_id.starts_with("story-session-") {
+        return Err("仅支持导出冒险剧情存档".to_string());
+    }
+
+    let session_path = doc_dir
+        .join("MuseAI")
+        .join("agent-sessions")
+        .join(format!("{}.json", session_id));
+    let session_text = fs::read_to_string(&session_path).map_err(|e| e.to_string())?;
+    let session: AgentSessionRecord =
+        serde_json::from_str(&session_text).map_err(|e| e.to_string())?;
+    if session.messages.is_empty() {
+        return Err("当前故事还没有可导出的剧情内容".to_string());
+    }
+
+    let partner_str = crate::commands::workspace::load_app_state_path(doc_dir, "partner-store")?;
+    let partner_json: Value = serde_json::from_str(&partner_str).map_err(|e| e.to_string())?;
+    let card_ids = session.character_card_ids.clone().unwrap_or_default();
+    let character_name_map = load_session_character_name_map(&partner_json, &card_ids);
+    let title = title_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(session.title.as_str());
+
+    write_story_export_markdown(doc_dir, &session, title, &character_name_map)
+}
+
+#[tauri::command]
+pub fn export_story_session_markdown(
+    app: AppHandle,
+    session_id: String,
+    title: Option<String>,
+) -> Result<String, String> {
+    let doc_dir = app.path().document_dir().map_err(|e| e.to_string())?;
+    export_story_session_markdown_at_path(&doc_dir, &session_id, title.as_deref())
 }
 #[tauri::command]
 pub async fn summarize_text(request: SummarizeRequest) -> Result<String, String> {
@@ -499,6 +999,47 @@ fn clean_json_response(text: String) -> String {
     cleaned.trim().to_string()
 }
 
+fn escape_invalid_json_control_chars_in_strings(text: &str) -> String {
+    let mut repaired = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for current in text.chars() {
+        if in_string {
+            if escaped {
+                repaired.push(current);
+                escaped = false;
+                continue;
+            }
+
+            match current {
+                '\\' => {
+                    repaired.push(current);
+                    escaped = true;
+                }
+                '"' => {
+                    repaired.push(current);
+                    in_string = false;
+                }
+                '\n' => repaired.push_str("\\n"),
+                '\r' => repaired.push_str("\\r"),
+                '\t' => repaired.push_str("\\t"),
+                c if (c as u32) <= 0x1F => {
+                    repaired.push_str(&format!("\\u{:04x}", c as u32));
+                }
+                _ => repaired.push(current),
+            }
+        } else {
+            repaired.push(current);
+            if current == '"' {
+                in_string = true;
+            }
+        }
+    }
+
+    repaired
+}
+
 fn format_network_error(e: &reqwest::Error) -> String {
     let msg = e.to_string().to_lowercase();
     if msg.contains("timeout") {
@@ -513,14 +1054,22 @@ fn format_network_error(e: &reqwest::Error) -> String {
 
 fn canonical_json_response(text: String) -> Result<String, String> {
     let cleaned = clean_json_response(text);
-    let parsed: Value = serde_json::from_str(&cleaned).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("EOF") {
-            "模型返回的 JSON 被截断了（输出超长）。".to_string()
-        } else {
-            format!("模型没有返回合法 JSON，请重新分析：{}", e)
+    let parsed: Value = match serde_json::from_str(&cleaned) {
+        Ok(parsed) => parsed,
+        Err(strict_error) => {
+            let strict_message = strict_error.to_string();
+            if strict_message.contains("control character") {
+                let sanitized = escape_invalid_json_control_chars_in_strings(&cleaned);
+                serde_json::from_str(&sanitized).map_err(|sanitized_error| {
+                    format!("模型没有返回合法 JSON，请重新分析：{}", sanitized_error)
+                })?
+            } else if strict_message.contains("EOF") {
+                return Err("模型返回的 JSON 被截断了（输出超长）。".to_string());
+            } else {
+                return Err(format!("模型没有返回合法 JSON，请重新分析：{}", strict_error));
+            }
         }
-    })?;
+    };
     serde_json::to_string(&parsed).map_err(|e| e.to_string())
 }
 
@@ -873,6 +1422,37 @@ fn background_character_card_schema(character_name: &str) -> String {
     )
 }
 
+fn background_user_persona_schema() -> &'static str {
+    r#"{
+  "fields": {
+    "name": "用户在故事中的默认姓名或称呼",
+    "age": "年龄",
+    "gender": "性别",
+    "race": "种族",
+    "birthplace": "出生地",
+    "occupation": "职业",
+    "socialClass": "社会阶层",
+    "identityTags": ["身份标签1", "身份标签2"],
+    "heightBuild": "身高体型",
+    "iconicFeatures": "标志性特征",
+    "clothingStyle": "衣着风格",
+    "overallVibe": "整体气质",
+    "externalPersonality": "外在性格",
+    "internalPersonality": "内在性格",
+    "coreDesire": "核心欲望",
+    "fearWeakness": "恐惧与弱点",
+    "moralValues": "道德观念",
+    "quirk": "怪癖",
+    "skills": "技能专长",
+    "backgroundStory": "背景故事",
+    "relationships": "与主要角色或势力的人际关系",
+    "speakingStyle": "说话方式",
+    "typicalReactions": "典型反应"
+  },
+  "user_persona": "[身份与处境]\n...\n\n[与角色相关的气质]\n..."
+}"#
+}
+
 fn limit_background_context_text(text: &str, max_context_tokens: Option<u32>) -> String {
     let Some(max_context_tokens) = max_context_tokens else {
         return text.to_string();
@@ -975,6 +1555,31 @@ fn build_background_character_card_prompts(
     )
 }
 
+fn build_background_user_persona_prompts(
+    text: &str,
+    max_output_tokens: Option<u32>,
+    max_context_tokens: Option<u32>,
+) -> (String, String, u32) {
+    let system_prompt = "你是一名资深影视编剧，专门为 SillyTavern 补写中文用户设定。请根据作品正文或大纲，提炼出适合用户代入的主角轮廓，并同时返回结构化字段与用户设定文本。务必只返回严格合法的纯 JSON，不要包含 Markdown 代码块或任何解释。".to_string();
+    let limited_text = limit_background_context_text(text, max_context_tokens);
+    let user_prompt = format!(
+        "请从以下参考内容中提炼一个适合玩家代入的“用户设定 / 主角轮廓”。\n\
+         要求：\n\
+         1. fields 尽量提炼会影响互动与叙事推进的信息；没有依据的字段可留空字符串或空数组。\n\
+         2. user_persona 必须使用中文，采用 [身份与处境] 和 [与角色相关的气质] 两个模块，总长控制在 150 字以内。\n\
+         3. 不要把用户写死成只能做某件事的人，不要规定用户台词。\n\
+         4. 仅返回纯 JSON，不要包含 ```json、前言或后记。\n\n\
+         JSON 必须严格满足以下结构定义：\n{}\n\n\
+         以下是参考内容：\n\
+         ===========================\n\
+         {}\n\
+         ===========================",
+        background_user_persona_schema(),
+        limited_text
+    );
+    (system_prompt, user_prompt, max_output_tokens.unwrap_or(4096))
+}
+
 fn value_to_background_item(
     value: &Value,
     fallback_name: &str,
@@ -1073,6 +1678,31 @@ fn parse_background_character_card_response(
         ));
     }
     Ok(item)
+}
+
+fn parse_background_user_persona_response(
+    text: String,
+) -> Result<GeneratedBackgroundUserPersona, String> {
+    let raw_text = text.clone();
+    let canonical = canonical_background_json_response(text)?;
+    let parsed: Value = serde_json::from_str(&canonical).map_err(|e| e.to_string())?;
+    let user_persona = parsed
+        .get("user_persona")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| background_json_error_with_raw(&raw_text, "模型没有返回 user_persona"))?
+        .to_string();
+    let fields = parsed
+        .get("fields")
+        .cloned()
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| json!({}));
+
+    Ok(GeneratedBackgroundUserPersona {
+        fields,
+        user_persona,
+    })
 }
 
 async fn with_cancellation<T, F, E>(
@@ -1337,6 +1967,51 @@ pub async fn generate_background_character_card(
     unregister_cancellation_token(&request.task_id);
     let raw_content = raw_content?;
     parse_background_character_card_response(raw_content, character_name)
+}
+
+#[tauri::command]
+pub async fn generate_background_user_persona(
+    request: GenerateBackgroundUserPersonaRequest,
+) -> Result<GeneratedBackgroundUserPersona, String> {
+    validate_background_text(&request.text)?;
+    let cancel_token = register_cancellation_token(request.task_id.clone());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .http1_only()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let (system_prompt, user_prompt, max_tokens) = build_background_user_persona_prompts(
+        &request.text,
+        request.max_output_tokens,
+        request.max_context_tokens,
+    );
+
+    let raw_content = call_background_llm(
+        &client,
+        &request.model_interface,
+        &request.base_url,
+        &request.api_key,
+        &request.model,
+        &system_prompt,
+        &user_prompt,
+        max_tokens,
+        request.temperature.unwrap_or(0.0),
+        request.thinking_depth.as_deref(),
+        &cancel_token,
+    )
+    .await;
+
+    if let Err(ref e) = raw_content {
+        if e == "任务已取消" {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    unregister_cancellation_token(&request.task_id);
+    let raw_content = raw_content?;
+    parse_background_user_persona_response(raw_content)
 }
 
 #[tauri::command]
@@ -3187,6 +3862,8 @@ async fn run_reverse_outline_analysis_task(
 #[cfg(test)]
 mod tests {
     use super::{
+        archive_agent_session_at_path, export_story_session_markdown_at_path,
+        ArchiveCharacterMemory, ArchivePayload,
         append_agent_run_error_log, build_analyze_memory_user_prompt,
         build_background_character_card_prompts, build_background_stage_one_prompts,
         build_long_reverse_outline_batches, build_long_reverse_outline_segments,
@@ -3199,7 +3876,9 @@ mod tests {
         ReverseOutlineSegment,
         ReverseOutlineSourceDoc, ReverseOutlineSummaryBatch,
     };
-    use crate::models::AnalyzeMemoryRequest;
+    use crate::models::{
+        AgentSessionMessage, AgentSessionRecord, AgentSessionTool, AnalyzeMemoryRequest,
+    };
     use serde_json::Value;
     use std::env;
     use std::fs;
@@ -3296,6 +3975,19 @@ plain text
         let parsed: Value = serde_json::from_str(&output).expect("output should parse");
         assert_eq!(parsed["sessionTitle"], "归档标题");
         assert_eq!(parsed["keyEvents"], "共同完成一次对话");
+    }
+
+    #[test]
+    fn canonical_json_response_repairs_control_chars_inside_strings() {
+        let input = "{\"sessionTitle\":\"归档标题\",\"keyEvents\":\"第一行\n第二行\u{0000}第三行\"}"
+            .to_string();
+
+        let output =
+            canonical_json_response(input).expect("control chars inside strings should be repaired");
+        let parsed: Value = serde_json::from_str(&output).expect("output should parse");
+
+        assert_eq!(parsed["sessionTitle"], "归档标题");
+        assert_eq!(parsed["keyEvents"], "第一行\n第二行\u{0000}第三行");
     }
 
     #[test]
@@ -3762,5 +4454,306 @@ plain text
 
         let (custom_prompt, _) = long_final_prompt(&summaries, Some("自定义提示词")).unwrap();
         assert_eq!(custom_prompt, "自定义提示词");
+    }
+
+    #[test]
+    fn archive_partner_session_writes_markdown_file() {
+        let root = temp_museai_dir("archive_partner");
+        let session_dir = root.join("MuseAI").join("agent-sessions");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+
+        let partner_store = serde_json::json!({
+            "state": {
+                "characterCards": [{
+                    "id": "card-1",
+                    "name": "禾禾",
+                    "content": "# 禾禾",
+                    "fields": {}
+                }]
+            }
+        });
+        crate::commands::workspace::save_app_state_path(
+            &root,
+            "partner-store",
+            &serde_json::to_string_pretty(&partner_store).expect("serialize partner store"),
+        )
+        .expect("save partner store");
+
+        let articles_dir = root.join("MuseAI").join("articles").join("长篇A");
+        fs::create_dir_all(&articles_dir).expect("create article dir");
+        let work_file = articles_dir.join("第一章.md");
+        fs::write(&work_file, "# 第一章").expect("write work file");
+
+        let session = AgentSessionRecord {
+            id: "partner-session-test".to_string(),
+            title: "测试聊天".to_string(),
+            saved_at: 0,
+            messages: vec![
+                AgentSessionMessage {
+                    id: "m1".to_string(),
+                    role: "user".to_string(),
+                    content: "你好".to_string(),
+                    thinking: None,
+                    tools: None,
+                    thinking_blocks: None,
+                },
+                AgentSessionMessage {
+                    id: "m2".to_string(),
+                    role: "agent".to_string(),
+                    content: "你好呀[[THINKING:test]]".to_string(),
+                    thinking: None,
+                    tools: Some(vec![AgentSessionTool {
+                        id: Some("tool-1".to_string()),
+                        name: "lookup".to_string(),
+                        result: "工具结果".to_string(),
+                        status: Some("success".to_string()),
+                        arguments: Some("{}".to_string()),
+                    }]),
+                    thinking_blocks: None,
+                },
+            ],
+            selected_reference_files: vec![],
+            selected_outline_file: None,
+            selected_work_file: None,
+            todos: vec![],
+            context_compaction: None,
+            is_archived: Some(false),
+            character_card_id: Some("card-1".to_string()),
+            character_card_ids: None,
+            selected_world_book_id: None,
+            dynamic_role_loading_enabled: None,
+        };
+        fs::write(
+            session_dir.join("partner-session-test.json"),
+            serde_json::to_string_pretty(&session).expect("serialize session"),
+        )
+        .expect("write session");
+
+        archive_agent_session_at_path(
+            &root,
+            "partner-session-test",
+            &ArchivePayload {
+                title: "归档标题".to_string(),
+                user_relation_type: Some("伙伴".to_string()),
+                user_interaction_model: Some("互相信任".to_string()),
+                user_relation_bottom_line: Some("保持坦诚".to_string()),
+                key_events: Some("共同完成一次对话".to_string()),
+                character_memories: None,
+            },
+        )
+        .expect("archive session");
+
+        let updated_store = crate::commands::workspace::load_app_state_path(&root, "partner-store")
+            .expect("reload partner store");
+        assert!(updated_store.contains("伙伴"));
+        assert!(!root.join("MuseAI").join("archives").join("chats").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archive_story_session_writes_markdown_file() {
+        let root = temp_museai_dir("archive_story");
+        let session_dir = root.join("MuseAI").join("agent-sessions");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+
+        let partner_store = serde_json::json!({
+            "state": {
+                "characterCards": [
+                    {
+                        "id": "card-1",
+                        "name": "禾禾",
+                        "content": "# 禾禾",
+                        "fields": {}
+                    },
+                    {
+                        "id": "card-2",
+                        "name": "林逸",
+                        "content": "# 林逸",
+                        "fields": {}
+                    }
+                ]
+            }
+        });
+        crate::commands::workspace::save_app_state_path(
+            &root,
+            "partner-store",
+            &serde_json::to_string_pretty(&partner_store).expect("serialize partner store"),
+        )
+        .expect("save partner store");
+
+        let session = AgentSessionRecord {
+            id: "story-session-test".to_string(),
+            title: "测试冒险".to_string(),
+            saved_at: 0,
+            messages: vec![
+                AgentSessionMessage {
+                    id: "m1".to_string(),
+                    role: "user".to_string(),
+                    content: "进入森林".to_string(),
+                    thinking: None,
+                    tools: None,
+                    thinking_blocks: None,
+                },
+                AgentSessionMessage {
+                    id: "m2".to_string(),
+                    role: "agent".to_string(),
+                    content: "林间响起脚步声".to_string(),
+                    thinking: None,
+                    tools: None,
+                    thinking_blocks: None,
+                },
+            ],
+            selected_reference_files: vec![],
+            selected_outline_file: None,
+            selected_work_file: None,
+            todos: vec![],
+            context_compaction: None,
+            is_archived: Some(false),
+            character_card_id: None,
+            character_card_ids: Some(vec!["card-1".to_string(), "card-2".to_string()]),
+            selected_world_book_id: None,
+            dynamic_role_loading_enabled: Some(false),
+        };
+        fs::write(
+            session_dir.join("story-session-test.json"),
+            serde_json::to_string_pretty(&session).expect("serialize session"),
+        )
+        .expect("write session");
+
+        archive_agent_session_at_path(
+            &root,
+            "story-session-test",
+            &ArchivePayload {
+                title: "森林归档".to_string(),
+                user_relation_type: None,
+                user_interaction_model: None,
+                user_relation_bottom_line: None,
+                key_events: None,
+                character_memories: Some(vec![
+                    ArchiveCharacterMemory {
+                        character_card_id: "card-1".to_string(),
+                        user_relation_type: "同伴".to_string(),
+                        user_interaction_model: "并肩探索".to_string(),
+                        user_relation_bottom_line: "关键时刻互相支援".to_string(),
+                        key_events: "在森林入口结盟".to_string(),
+                    },
+                    ArchiveCharacterMemory {
+                        character_card_id: "card-2".to_string(),
+                        user_relation_type: "盟友".to_string(),
+                        user_interaction_model: "谨慎合作".to_string(),
+                        user_relation_bottom_line: "不互相隐瞒危险".to_string(),
+                        key_events: "共同追踪脚步声".to_string(),
+                    },
+                ]),
+            },
+        )
+        .expect("archive session");
+
+        let updated_session_text =
+            fs::read_to_string(session_dir.join("story-session-test.json")).expect("read session");
+        let updated_session: AgentSessionRecord =
+            serde_json::from_str(&updated_session_text).expect("parse session");
+        assert_eq!(updated_session.is_archived, Some(true));
+        assert_eq!(updated_session.title, "森林归档");
+        assert!(!root.join("MuseAI").join("archives").join("adventures").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn export_story_session_writes_markdown_file() {
+        let root = temp_museai_dir("export_story");
+        let session_dir = root.join("MuseAI").join("agent-sessions");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+
+        let partner_store = serde_json::json!({
+            "state": {
+                "characterCards": [
+                    {
+                        "id": "card-1",
+                        "name": "禾禾",
+                        "content": "# 禾禾",
+                        "fields": {}
+                    },
+                    {
+                        "id": "card-2",
+                        "name": "林逸",
+                        "content": "# 林逸",
+                        "fields": {}
+                    }
+                ]
+            }
+        });
+        crate::commands::workspace::save_app_state_path(
+            &root,
+            "partner-store",
+            &serde_json::to_string_pretty(&partner_store).expect("serialize partner store"),
+        )
+        .expect("save partner store");
+
+        let session = AgentSessionRecord {
+            id: "story-session-export".to_string(),
+            title: "导出测试".to_string(),
+            saved_at: 0,
+            messages: vec![
+                AgentSessionMessage {
+                    id: "m1".to_string(),
+                    role: "user".to_string(),
+                    content: "进入森林".to_string(),
+                    thinking: None,
+                    tools: None,
+                    thinking_blocks: None,
+                },
+                AgentSessionMessage {
+                    id: "m2".to_string(),
+                    role: "agent".to_string(),
+                    content: "林间响起脚步声[[THINKING:test]]".to_string(),
+                    thinking: None,
+                    tools: Some(vec![AgentSessionTool {
+                        id: Some("tool-1".to_string()),
+                        name: "role_play".to_string(),
+                        result: "禾禾：跟紧我".to_string(),
+                        status: Some("success".to_string()),
+                        arguments: Some("{}".to_string()),
+                    }]),
+                    thinking_blocks: None,
+                },
+            ],
+            selected_reference_files: vec![],
+            selected_outline_file: None,
+            selected_work_file: Some(work_file.to_string_lossy().into_owned()),
+            todos: vec![],
+            context_compaction: None,
+            is_archived: Some(false),
+            character_card_id: None,
+            character_card_ids: Some(vec!["card-1".to_string(), "card-2".to_string()]),
+            selected_world_book_id: None,
+            dynamic_role_loading_enabled: Some(false),
+        };
+        fs::write(
+            session_dir.join("story-session-export.json"),
+            serde_json::to_string_pretty(&session).expect("serialize session"),
+        )
+        .expect("write session");
+
+        let export_path = export_story_session_markdown_at_path(
+            &root,
+            "story-session-export",
+            Some("剧情导出"),
+        )
+        .expect("export story session");
+        let export_path = PathBuf::from(export_path);
+        assert_eq!(
+            export_path.parent(),
+            Some(articles_dir.as_path()),
+            "story export should be saved beside the selected work"
+        );
+        let markdown = fs::read_to_string(&export_path).expect("read markdown");
+        assert!(markdown.contains("# 剧情导出"));
+        assert!(markdown.contains("**存档类型**：剧情存档"));
+        assert!(markdown.contains("### 我"));
+        assert!(markdown.contains("### 故事旁白与NPC（"));
+        assert!(markdown.contains("禾禾：跟紧我"));
+        assert!(!markdown.contains("[[THINKING:"));
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -4,12 +4,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Gallery from '../pages/Gallery';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useGalleryVideoStore } from '../stores/useGalleryVideoStore';
+import { createAgnesVideoTask } from '../utils/agnesVideoGeneration';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
 vi.mock('../utils/agnesVideoGeneration', () => ({
+  AGNES_VIDEO_DURATION_OPTIONS: {
+    3: { numFrames: 81, frameRate: 24, label: '约 3 秒' },
+    5: { numFrames: 121, frameRate: 24, label: '约 5 秒' },
+    10: { numFrames: 241, frameRate: 24, label: '约 10 秒' },
+    18: { numFrames: 441, frameRate: 24, label: '约 18 秒' },
+  },
   DEFAULT_VIDEO_MODEL: 'agnes-video-v2.0',
   createAgnesVideoTask: vi.fn(async () => ({ taskId: 'task-1', videoId: 'video-1' })),
   AgnesVideoPendingError: class AgnesVideoPendingError extends Error {
@@ -23,10 +30,12 @@ vi.mock('../utils/agnesVideoGeneration', () => ({
 }));
 
 const invokeMock = vi.mocked(invoke);
+const createAgnesVideoTaskMock = vi.mocked(createAgnesVideoTask);
 
 describe('Gallery page', () => {
   beforeEach(async () => {
     invokeMock.mockReset();
+    createAgnesVideoTaskMock.mockClear();
     useGalleryVideoStore.setState({ tasks: [] });
     invokeMock.mockImplementation(async (command: string, payload?: unknown) => {
       const args = (payload ?? {}) as Record<string, unknown>;
@@ -165,6 +174,102 @@ describe('Gallery page', () => {
     expect(screen.getByLabelText('参考图公网URL')).toHaveValue('https://litter.catbox.moe/example-role.png');
   });
 
+  it('can add uploaded reference images and submit multiple images for video generation', async () => {
+    invokeMock.mockImplementation(async (command: string, payload?: unknown) => {
+      const args = (payload ?? {}) as Record<string, unknown>;
+      if (command === 'get_workspace_dir' && args.dirType === 'articles') return '/workspace/articles';
+      if (command === 'get_workspace_dir' && args.dirType === 'references') return '/workspace/references';
+      if (command === 'list_dir' && args.path === '/workspace/articles') return [];
+      if (command === 'upload_temp_image') return 'https://litter.catbox.moe/extra-reference.png';
+      return undefined;
+    });
+    render(<Gallery />);
+
+    fireEvent.click(screen.getByRole('button', { name: /生成视频/ }));
+    expect(await screen.findByText(/生成视频：沈照夜角色图/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('参考图公网URL'), {
+      target: { value: 'https://cdn.example.com/role.png' },
+    });
+
+    const file = new File(['extra-image'], 'extra.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText('添加多图参考'), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByLabelText('参考图公网URL-2')).toHaveValue('https://litter.catbox.moe/extra-reference.png');
+
+    const videoButtons = screen.getAllByRole('button', { name: /生成视频/ });
+    fireEvent.click(videoButtons[videoButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(createAgnesVideoTaskMock).toHaveBeenCalledWith(expect.objectContaining({
+        image: ['https://cdn.example.com/role.png', 'https://litter.catbox.moe/extra-reference.png'],
+      }));
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /视频/ })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByText('沈照夜角色图')).toBeInTheDocument();
+    });
+  });
+
+  it('moves to the video tab as soon as Agnes accepts a multi-image video request', async () => {
+    let finishWriteMediaAsset: (() => void) | undefined;
+    createAgnesVideoTaskMock.mockResolvedValueOnce({
+      taskId: 'task-direct',
+      videoId: 'video-direct',
+      videoUrl: 'https://cdn.example.com/direct.mp4',
+    });
+    invokeMock.mockImplementation(async (command: string, payload?: unknown) => {
+      const args = (payload ?? {}) as Record<string, unknown>;
+      if (command === 'get_workspace_dir' && args.dirType === 'articles') return '/workspace/articles';
+      if (command === 'get_workspace_dir' && args.dirType === 'references') return '/workspace/references';
+      if (command === 'list_dir' && args.path === '/workspace/articles') return [];
+      if (command === 'upload_temp_image') return 'https://litter.catbox.moe/extra-reference.png';
+      if (command === 'write_media_asset') {
+        return new Promise((resolve) => {
+          finishWriteMediaAsset = () => resolve(2);
+        });
+      }
+      return undefined;
+    });
+    render(<Gallery />);
+
+    fireEvent.click(screen.getByRole('button', { name: /生成视频/ }));
+    await screen.findByText(/生成视频：沈照夜角色图/);
+    fireEvent.change(screen.getByLabelText('参考图公网URL'), {
+      target: { value: 'https://cdn.example.com/role.png' },
+    });
+    fireEvent.change(screen.getByLabelText('添加多图参考'), {
+      target: { files: [new File(['extra-image'], 'extra.png', { type: 'image/png' })] },
+    });
+    expect(await screen.findByLabelText('参考图公网URL-2')).toHaveValue('https://litter.catbox.moe/extra-reference.png');
+
+    const videoButtons = screen.getAllByRole('button', { name: /生成视频/ });
+    fireEvent.click(videoButtons[videoButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /视频/ })).toHaveAttribute('aria-selected', 'true');
+    });
+    finishWriteMediaAsset?.();
+  });
+
+  it('keeps the video modal open with a visible error when task creation fails', async () => {
+    createAgnesVideoTaskMock.mockRejectedValueOnce(new Error('视频生成失败：Invalid image'));
+    render(<Gallery />);
+
+    fireEvent.click(screen.getByRole('button', { name: /生成视频/ }));
+    await screen.findByText(/生成视频：沈照夜角色图/);
+    fireEvent.change(screen.getByLabelText('参考图公网URL'), {
+      target: { value: 'https://cdn.example.com/role.png' },
+    });
+    const videoButtons = screen.getAllByRole('button', { name: /生成视频/ });
+    fireEvent.click(videoButtons[videoButtons.length - 1]);
+
+    expect(await screen.findByText('视频任务创建失败')).toBeInTheDocument();
+    expect(screen.getByText('视频生成失败：Invalid image')).toBeInTheDocument();
+    expect(useGalleryVideoStore.getState().tasks).toEqual([]);
+  });
+
   it('reuses cached temp image url when reopening the same character image', async () => {
     usePartnerStore.setState({
       worldBooks: [],
@@ -208,8 +313,12 @@ describe('Gallery page', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /视频/ }));
     expect(await screen.findByText('已生成')).toBeInTheDocument();
-    expect(screen.getByText(/任务ID: task-pending/)).toBeInTheDocument();
-    expect(screen.getByText(/视频ID: video-pending/)).toBeInTheDocument();
+    expect(screen.queryByText(/任务ID:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/视频ID:/)).not.toBeInTheDocument();
+    expect(useGalleryVideoStore.getState().tasks[0]).toMatchObject({
+      taskId: 'task-pending',
+      videoId: 'video-pending',
+    });
   });
 
   it('can query a pending video task from the video tab', async () => {

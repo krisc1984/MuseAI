@@ -1,0 +1,63 @@
+.gcg-about-sheet,
+.gcg-about-card,
+.gcg-about-grid,
+.gcg-about-main {
+    display: grid;
+    gap: 8px;
+}
+
+.gcg-about-sheet {
+    padding: 2px;
+}
+
+.gcg-about-hero {
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex-direction: column;
+    gap: 4px;
+    padding: 2px 2px 0;
+}
+
+.gcg-about-card {
+    padding: 8px 0 0;
+    border: 0;
+    border-top: 1px solid var(--gcg-line);
+    background: transparent;
+}
+
+.gcg-about-row {
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--gcg-line) 74%, transparent);
+}
+
+.gcg-about-row:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.gcg-about-main {
+    gap: 2px;
+}
+
+.gcg-about-value {
+    color: var(--gcg-text);
+    font: 400 12px/1.5 var(--gcg-sans);
+    word-break: break-all;
+}
+
+.gcg-about-license {
+    color: var(--gcg-text);
+}
+
+.gcg-about-toolbar {
+    justify-content: flex-end;
+    padding-top: 2px;
+}
+
+.gcg-about-popup .popup-content {
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 96%, #f6f7f9 4%);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    box-shadow: none;
+}

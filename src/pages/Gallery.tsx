@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Alert, Button, Card, Empty, Input, InputNumber, Modal, Select, Space, Spin, Tabs, Tag, Typography, message } from 'antd';
-import { BookOutlined, PictureOutlined, ReloadOutlined, UserOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Empty, Input, Modal, Select, Space, Spin, Tabs, Tag, Typography, message } from 'antd';
+import { BookOutlined, DeleteOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, UserOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { usePartnerStore, type CharacterVisualGalleryItem, type PartnerItem } from '../stores/usePartnerStore';
 import { appendStoryIllustrationGalleryMeta, parseStoryIllustrationGallery, type StoryIllustrationGalleryItem } from '../utils/storyIllustrationGallery';
-import { DEFAULT_VIDEO_MODEL, createAgnesVideoTask, queryAgnesVideoTask, type AgnesVideoAspectRatio, type AgnesVideoDuration } from '../utils/agnesVideoGeneration';
+import { AGNES_VIDEO_DURATION_OPTIONS, DEFAULT_VIDEO_MODEL, createAgnesVideoTask, queryAgnesVideoTask, type AgnesVideoAspectRatio, type AgnesVideoDuration } from '../utils/agnesVideoGeneration';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useGalleryVideoStore, type GalleryVideoTask } from '../stores/useGalleryVideoStore';
 
@@ -31,9 +31,30 @@ type VideoSource =
   | { kind: 'character'; cardId: string; itemId: string; title: string; image: string; publicImageUrl: string; saveDir: string; fileBaseName: string }
   | { kind: 'story'; sourcePath: string; itemId: string; title: string; image: string; publicImageUrl: string; saveDir: string; fileBaseName: string };
 
+interface VideoReferenceImage {
+  id: string;
+  preview: string;
+  publicUrl: string;
+  source: string;
+}
+
 const getFileName = (path: string) => path.split(/[\\/]/).pop() || path;
 const getDirectoryName = (path: string) => path.replace(/[\\/][^\\/]*$/, '');
 const slugifyFileName = (input: string) => input.replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'video';
+const createLocalId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (typeof reader.result === 'string') {
+      resolve(reader.result);
+    } else {
+      reject(new Error('读取图片失败'));
+    }
+  };
+  reader.onerror = () => reject(new Error('读取图片失败'));
+  reader.readAsDataURL(file);
+});
 
 const Gallery: React.FC = () => {
   const { characterCards, updateItemFields } = usePartnerStore();
@@ -49,11 +70,13 @@ const Gallery: React.FC = () => {
   const [videoAspectRatio, setVideoAspectRatio] = useState<AgnesVideoAspectRatio>('16:9');
   const [videoDuration, setVideoDuration] = useState<AgnesVideoDuration>(5);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
-  const [videoImageUrl, setVideoImageUrl] = useState('');
+  const [videoReferenceImages, setVideoReferenceImages] = useState<VideoReferenceImage[]>([]);
   const [videoNegativePrompt, setVideoNegativePrompt] = useState('');
+  const [videoGenerationError, setVideoGenerationError] = useState('');
   const [isUploadingTempImage, setIsUploadingTempImage] = useState(false);
   const [activeTab, setActiveTab] = useState('characters');
   const queryingTaskIdsRef = useRef<Set<string>>(new Set());
+  const videoReferenceFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const characterEntries = useMemo<CharacterGalleryEntry[]>(
     () => characterCards.flatMap((card) => (card.fields?.visualImageGallery || []).map((item) => ({
@@ -168,7 +191,13 @@ const Gallery: React.FC = () => {
     setVideoSource(source);
     setVideoAspectRatio('16:9');
     setVideoDuration(5);
-    setVideoImageUrl(source.publicImageUrl);
+    setVideoGenerationError('');
+    setVideoReferenceImages([{
+      id: createLocalId('video-reference'),
+      preview: source.image,
+      publicUrl: source.publicImageUrl,
+      source: source.image,
+    }]);
     setVideoNegativePrompt('blurry, low quality, flicker, distorted hands, extra limbs, identity drift, unstable face');
     setVideoPrompt(`请基于这张${source.kind === 'character' ? '角色' : '剧情'}图片生成一段高质量动态短视频。保持主体造型、服饰、构图和氛围一致，镜头运动自然，画面稳定，细节清晰，避免人物结构漂移和闪烁。`);
   }, []);
@@ -177,6 +206,7 @@ const Gallery: React.FC = () => {
     if (!videoSource) {
       return;
     }
+    setVideoGenerationError('');
     if (!settings.videoModelApiKey) {
       message.warning('视频生成 API Key 尚未配置，请先在设置页配置。');
       return;
@@ -186,9 +216,13 @@ const Gallery: React.FC = () => {
       message.warning('请先填写视频提示词。');
       return;
     }
-    const imageUrl = videoImageUrl.trim();
-    if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) {
-      message.warning('请提供可公网访问的参考图 URL。');
+    const imageUrls = videoReferenceImages.map((item) => item.publicUrl.trim()).filter(Boolean);
+    if (imageUrls.length === 0) {
+      message.warning('请至少提供一张可公网访问的参考图 URL。');
+      return;
+    }
+    if (imageUrls.some((url) => !/^https?:\/\//i.test(url))) {
+      message.warning('参考图 URL 必须是 http(s) 公网链接。');
       return;
     }
 
@@ -197,8 +231,7 @@ const Gallery: React.FC = () => {
       '9:16': { width: 768, height: 1152 },
       '1:1': { width: 960, height: 960 },
     };
-    const frameRate = 24;
-    const numFrames = videoDuration === 10 ? 241 : 121;
+    const { numFrames, frameRate } = AGNES_VIDEO_DURATION_OPTIONS[videoDuration];
     const { width, height } = dimensionMap[videoAspectRatio];
     const localTaskId = `video-task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const baseTask: GalleryVideoTask = {
@@ -208,7 +241,7 @@ const Gallery: React.FC = () => {
       sourceItemId: videoSource.itemId,
       sourcePath: videoSource.kind === 'story' ? videoSource.sourcePath : undefined,
       prompt,
-      imageUrl,
+      imageUrl: imageUrls[0],
       aspectRatio: videoAspectRatio,
       duration: videoDuration,
       saveDir: videoSource.kind === 'character' ? `${referencesRoot || videoSource.saveDir}/gallery-videos` : videoSource.saveDir,
@@ -226,13 +259,17 @@ const Gallery: React.FC = () => {
         baseUrl: settings.videoModelBaseUrl,
         model: settings.videoModelName || DEFAULT_VIDEO_MODEL,
         prompt,
-        image: imageUrl,
+        image: imageUrls.length === 1 ? imageUrls[0] : imageUrls,
         width,
         height,
         numFrames,
         frameRate,
         negativePrompt: videoNegativePrompt,
       });
+
+      setVideoSource(null);
+      setVideoReferenceImages([]);
+      setActiveTab('videos');
 
       if (result.videoUrl) {
         const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
@@ -264,20 +301,16 @@ const Gallery: React.FC = () => {
         });
         message.success('视频任务已创建，可在图库的视频栏目查看进度。');
       }
-      setVideoSource(null);
     } catch (error) {
       console.error('生成视频失败:', error);
-      upsertTask({
-        ...baseTask,
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : '生成视频失败',
-        updatedAt: Date.now(),
-      });
-      message.error(error instanceof Error ? error.message : '生成视频失败');
+      const errorMessage = error instanceof Error ? error.message : '生成视频失败';
+      removeTask(baseTask.id);
+      setVideoGenerationError(errorMessage);
+      message.error(errorMessage);
     } finally {
       setIsGeneratingVideo(false);
     }
-  }, [referencesRoot, settings.videoModelApiKey, settings.videoModelBaseUrl, settings.videoModelName, upsertTask, videoAspectRatio, videoDuration, videoImageUrl, videoNegativePrompt, videoPrompt, videoSource]);
+  }, [referencesRoot, removeTask, settings.videoModelApiKey, settings.videoModelBaseUrl, settings.videoModelName, upsertTask, videoAspectRatio, videoDuration, videoNegativePrompt, videoPrompt, videoReferenceImages, videoSource]);
 
   const handleQueryVideoTask = useCallback(async (task: GalleryVideoTask, options?: { silent?: boolean }) => {
     if (!task.taskId && !task.videoId) {
@@ -389,7 +422,7 @@ const Gallery: React.FC = () => {
     setIsUploadingTempImage(true);
     try {
       const uploadedUrl = await invoke<string>('upload_temp_image', { source: videoSource.image });
-      setVideoImageUrl(uploadedUrl);
+      setVideoReferenceImages((prev) => prev.map((item, index) => index === 0 ? { ...item, publicUrl: uploadedUrl } : item));
       if (videoSource.kind === 'character') {
         const card = characterCards.find((item) => item.id === videoSource.cardId);
         if (card) {
@@ -419,6 +452,41 @@ const Gallery: React.FC = () => {
       setIsUploadingTempImage(false);
     }
   }, [characterCards, updateItemFields, videoSource]);
+
+  const handleUploadAdditionalVideoReferences = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) {
+      return;
+    }
+    const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
+      message.warning('请选择图片文件。');
+      return;
+    }
+    setIsUploadingTempImage(true);
+    try {
+      const uploadedItems: VideoReferenceImage[] = [];
+      for (const file of imageFiles) {
+        const dataUrl = await readFileAsDataUrl(file);
+        const uploadedUrl = await invoke<string>('upload_temp_image', { source: dataUrl });
+        uploadedItems.push({
+          id: createLocalId('video-reference'),
+          preview: dataUrl,
+          publicUrl: uploadedUrl,
+          source: dataUrl,
+        });
+      }
+      setVideoReferenceImages((prev) => [...prev, ...uploadedItems]);
+      message.success(`已添加 ${uploadedItems.length} 张参考图`);
+    } catch (error) {
+      console.error('上传多图参考失败:', error);
+      message.error(error instanceof Error ? error.message : '上传多图参考失败');
+    } finally {
+      setIsUploadingTempImage(false);
+      if (videoReferenceFileInputRef.current) {
+        videoReferenceFileInputRef.current.value = '';
+      }
+    }
+  }, []);
 
   return (
     <div style={{ padding: 24, overflowY: 'auto', height: '100%' }}>
@@ -630,8 +698,6 @@ const Gallery: React.FC = () => {
                       <Space wrap>
                         <Tag>{task.aspectRatio}</Tag>
                         <Tag>{task.duration}s</Tag>
-                        {task.taskId && <Tag color="blue">任务ID: {task.taskId}</Tag>}
-                        {task.videoId && <Tag color="purple">视频ID: {task.videoId}</Tag>}
                       </Space>
                       {task.videoUrl ? (
                         <video src={task.videoUrl} controls style={{ width: '100%', borderRadius: 8, background: '#000' }} />
@@ -706,26 +772,75 @@ const Gallery: React.FC = () => {
         {videoSource && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, alignItems: 'start' }}>
-                <img src={videoSource.image} alt="视频生成参考图" style={{ width: '100%', borderRadius: 8, objectFit: 'cover', background: '#faf9f5' }} />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  {videoReferenceImages.map((item, index) => (
+                    <div key={item.id} style={{ position: 'relative' }}>
+                      <img src={item.preview} alt={`视频生成参考图${index + 1}`} style={{ width: '100%', aspectRatio: '1 / 1', borderRadius: 8, objectFit: 'cover', background: '#faf9f5' }} />
+                      {index > 0 && (
+                        <Button
+                          aria-label={`删除参考图-${index + 1}`}
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => setVideoReferenceImages((prev) => prev.filter((entry) => entry.id !== item.id))}
+                          style={{ position: 'absolute', top: 6, right: 6 }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Alert
                     type="info"
                     showIcon
-                    message="Agnes Video V2.0 需要可公网访问的参考图 URL"
-                    description="如果当前图库图片不是公网链接，请先把图片上传到可外链的图床/CDN，再把 URL 粘贴到这里。"
+                    message="Agnes Video V2.0 支持单图或多图参考"
+                    description="每张参考图都需要可公网访问的 URL。可以上传当前图或继续添加本地图片，系统会自动上传并回填。"
                   />
+                  {videoGenerationError && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="视频任务创建失败"
+                      description={videoGenerationError}
+                    />
+                  )}
                   <div>
                     <Typography.Text type="secondary">参考图公网 URL</Typography.Text>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                      <Input
-                        aria-label="参考图公网URL"
-                        value={videoImageUrl}
-                        onChange={(event) => setVideoImageUrl(event.target.value)}
-                        placeholder="https://example.com/your-image.png"
-                      />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+                      {videoReferenceImages.map((item, index) => (
+                        <div key={item.id} style={{ display: 'flex', gap: 8 }}>
+                          <Input
+                            aria-label={index === 0 ? '参考图公网URL' : `参考图公网URL-${index + 1}`}
+                            value={item.publicUrl}
+                            onChange={(event) => setVideoReferenceImages((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, publicUrl: event.target.value } : entry))}
+                            placeholder="https://example.com/your-image.png"
+                          />
+                          {index > 0 && (
+                            <Button
+                              aria-label={`移除参考图URL-${index + 1}`}
+                              icon={<DeleteOutlined />}
+                              onClick={() => setVideoReferenceImages((prev) => prev.filter((entry) => entry.id !== item.id))}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                       <Button loading={isUploadingTempImage} onClick={() => void handleUploadTempImage()}>
                         上传并回填
                       </Button>
+                      <Button icon={<PlusOutlined />} loading={isUploadingTempImage} onClick={() => videoReferenceFileInputRef.current?.click()}>
+                        添加参考图
+                      </Button>
+                      <input
+                        ref={videoReferenceFileInputRef}
+                        aria-label="添加多图参考"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        style={{ display: 'none' }}
+                        onChange={(event) => void handleUploadAdditionalVideoReferences(event.target.files)}
+                      />
                     </div>
                   </div>
                   <div>
@@ -765,13 +880,14 @@ const Gallery: React.FC = () => {
                   </div>
                   <div>
                     <Typography.Text type="secondary">时长（秒）</Typography.Text>
-                    <InputNumber
+                    <Select
                       aria-label="视频时长秒数"
-                      min={5}
-                      max={10}
-                      step={5}
                       value={videoDuration}
-                      onChange={(value) => setVideoDuration((value === 10 ? 10 : 5) as AgnesVideoDuration)}
+                      onChange={(value: AgnesVideoDuration) => setVideoDuration(value)}
+                      options={(Object.entries(AGNES_VIDEO_DURATION_OPTIONS) as Array<[string, typeof AGNES_VIDEO_DURATION_OPTIONS[AgnesVideoDuration]]>).map(([value, params]) => ({
+                        value: Number(value) as AgnesVideoDuration,
+                        label: `${params.label}（${params.numFrames} 帧 / ${params.frameRate}fps）`,
+                      }))}
                       style={{ width: '100%', marginTop: 6 }}
                     />
                   </div>

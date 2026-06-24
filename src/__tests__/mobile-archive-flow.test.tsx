@@ -9,6 +9,7 @@ import { useStoryStore } from '../stores/useStoryStore';
 const appInvokeMock = vi.fn(async (command: string, _args?: unknown) => {
   if (command === 'list_agent_sessions') return [];
   if (command === 'save_agent_session') return { id: 'saved-session', title: '已保存' };
+  if (command === 'export_story_session_markdown') return { path: 'F:/codebaby/MuseAI/MuseAI/archives/adventures/export.md' };
   if (command === 'analyze_character_memory') {
     return {
       recommendedSessionTitle: '归档标题',
@@ -160,5 +161,39 @@ describe('mobile archive flow', () => {
     const analyzeIndex = appInvokeMock.mock.calls.findIndex(([command]) => command === 'analyze_character_memory');
     expect(saveIndex).toBeLessThan(analyzeIndex);
     expect(await screen.findByDisplayValue('归档标题')).toBeInTheDocument();
+  });
+
+  it('exports story markdown without entering archive analysis flow', async () => {
+    useStoryStore.setState({
+      messages: [{ id: 'm1', role: 'user', content: '进入森林', tools: [] }],
+      input: '',
+      inputMode: 'speech',
+      isStreaming: false,
+      expandedBlocks: {},
+      selectedWorldBookId: null,
+      selectedCharacterCardIds: [characterCard.id, secondCharacterCard.id],
+      selectedUserCharacterCardId: secondCharacterCard.id,
+      sessions: [],
+      sessionId: 'story-session-export',
+      sessionTitle: '导出故事',
+      activeRun: { runId: null, messageId: null },
+      isSessionArchived: false,
+      initialPlot: '',
+      contextCompaction: null,
+      dynamicRoleLoadingEnabled: false,
+    });
+
+    render(<MobileStory />);
+    fireEvent.click(screen.getByText('导出剧情存档'));
+
+    await waitFor(() => {
+      expect(appInvokeMock).toHaveBeenCalledWith('export_story_session_markdown', {
+        sessionId: 'story-session-export',
+        title: '导出故事',
+      });
+    });
+
+    expect(appInvokeMock).not.toHaveBeenCalledWith('analyze_character_memory', expect.anything());
+    expect(screen.queryByText('请选择本次要同步记忆的角色卡：')).not.toBeInTheDocument();
   });
 });

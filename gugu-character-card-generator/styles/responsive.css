@@ -1,0 +1,45 @@
+@media (max-width: 960px) {
+    .gcg-api-primary-row,
+    .gcg-api-secondary-row {
+        grid-template-columns: 1fr;
+    }
+
+    .gcg-submit-row {
+        flex-direction: column;
+    }
+
+    .gcg-primary-button {
+        width: 100%;
+        min-width: 0;
+    }
+}
+
+@media (max-width: 720px) {
+    .gcg-shell {
+        padding: 8px 9px 9px;
+    }
+
+    .gcg-profile-toolbar {
+        grid-template-columns: 1fr;
+    }
+
+    .gcg-current-topline {
+        align-items: flex-start;
+    }
+}
+
+@media (max-width: 560px) {
+    .gcg-tab-row {
+        overflow-x: auto;
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+    }
+
+    .gcg-tab-button {
+        min-width: 120px;
+    }
+
+    .gcg-current-actions,
+    .gcg-debug-actions {
+        flex-wrap: wrap;
+    }
+}

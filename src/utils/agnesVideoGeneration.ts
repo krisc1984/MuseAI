@@ -1,5 +1,14 @@
+import { invoke } from '@tauri-apps/api/core';
+
 export type AgnesVideoAspectRatio = '16:9' | '9:16' | '1:1';
-export type AgnesVideoDuration = 5 | 10;
+export type AgnesVideoDuration = 3 | 5 | 10 | 18;
+
+export const AGNES_VIDEO_DURATION_OPTIONS: Record<AgnesVideoDuration, { numFrames: number; frameRate: number; label: string }> = {
+  3: { numFrames: 81, frameRate: 24, label: '约 3 秒' },
+  5: { numFrames: 121, frameRate: 24, label: '约 5 秒' },
+  10: { numFrames: 241, frameRate: 24, label: '约 10 秒' },
+  18: { numFrames: 441, frameRate: 24, label: '约 18 秒' },
+};
 
 export interface GenerateAgnesVideoRequest {
   apiKey: string;
@@ -64,6 +73,45 @@ const readErrorMessage = async (response: Response) => {
   }
 };
 
+const isRealTauriHost = () => {
+  if (typeof window === 'undefined') return false;
+  return (
+    (window as any).__TAURI_INTERNALS__ !== undefined ||
+    (window as any).__TAURI__ !== undefined ||
+    (window as any).__TAURI_IPC__ !== undefined ||
+    (typeof navigator !== 'undefined' && navigator.userAgent?.includes('Tauri'))
+  );
+};
+
+const postAgnesVideoCreate = async (url: string, apiKey: string, body: Record<string, unknown>) => {
+  if (isRealTauriHost()) {
+    try {
+      return await invoke<unknown>('agnes_video_create', {
+        url,
+        apiKey,
+        body,
+      });
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(`视频生成失败：${await readErrorMessage(response)}`);
+  }
+
+  return response.json();
+};
+
 const pickVideoUrl = (payload: any): string | null => {
   return payload?.data?.[0]?.url
     || payload?.data?.[0]?.video_url
@@ -108,8 +156,8 @@ export const queryAgnesVideoTask = async (
   const modelName = options?.modelName?.trim();
   const candidateUrls = videoId
     ? [
-      `${rootBaseUrl}/agnesapi?video_id=${encodeURIComponent(videoId)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ''}`,
       `${rootBaseUrl}/agnesapi?video_id=${encodeURIComponent(videoId)}`,
+      ...(modelName ? [`${rootBaseUrl}/agnesapi?video_id=${encodeURIComponent(videoId)}&model_name=${encodeURIComponent(modelName)}`] : []),
       `${apiBaseUrl}/videos/${encodeURIComponent(id)}`,
     ]
     : [
@@ -147,11 +195,7 @@ export const createAgnesVideoTask = async (request: GenerateAgnesVideoRequest): 
     throw new Error('视频生成 API Key 尚未配置，请先在设置页配置。');
   }
 
-  const headers = {
-    Authorization: `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-  };
-
+  const isMultiImageRequest = Array.isArray(request.image) && request.image.length > 1;
   const body = {
     model: request.model || DEFAULT_VIDEO_MODEL,
     prompt: request.prompt,
@@ -162,25 +206,14 @@ export const createAgnesVideoTask = async (request: GenerateAgnesVideoRequest): 
       : request.image
         ? { image: request.image }
         : {}),
-    width: request.width,
-    height: request.height,
     num_frames: request.numFrames,
     frame_rate: request.frameRate,
-    ...(request.negativePrompt?.trim() ? { negative_prompt: request.negativePrompt.trim() } : {}),
-    ...(request.mode?.trim() ? { mode: request.mode.trim() } : {}),
+    ...(isMultiImageRequest ? {} : { width: request.width, height: request.height }),
+    ...(!isMultiImageRequest && request.negativePrompt?.trim() ? { negative_prompt: request.negativePrompt.trim() } : {}),
+    ...(!isMultiImageRequest && request.mode?.trim() ? { mode: request.mode.trim() } : {}),
   };
 
-  const response = await fetch(`${normalizeVideoBaseUrl(request.baseUrl)}/videos`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(`视频生成失败：${await readErrorMessage(response)}`);
-  }
-
-  const data = await response.json();
+  const data = await postAgnesVideoCreate(`${normalizeVideoBaseUrl(request.baseUrl)}/videos`, apiKey, body);
   const directVideoUrl = pickVideoUrl(data);
   const taskId = pickTaskId(data);
   const videoId = pickVideoId(data);

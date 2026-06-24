@@ -1,0 +1,10 @@
+{
+  "display_name": "咕咕助手 - 角色卡生成器",
+  "loading_order": 36,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "qingjue",
+  "version": "0.1.0",
+  "auto_update": true,
+  "minimum_client_version": "1.12.6"
+}

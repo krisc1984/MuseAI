@@ -1,4 +1,8 @@
-export type BackgroundExtractionMode = 'world_book_only' | 'character_cards_only' | 'world_book_and_character_cards';
+export type BackgroundExtractionMode =
+  | 'world_book_only'
+  | 'character_cards_only'
+  | 'world_book_and_character_cards'
+  | 'user_persona_only';
 
 export type CharacterExtractionStatus = 'pending' | 'running' | 'success' | 'failed';
 

@@ -74,6 +74,7 @@ export interface PartnerItemFields {
   
   // 典型反应
   typicalReactions?: string;
+  personaDescription?: string;
 
   // 角色记忆
   relationMemory?: string; // 关系记忆 (向下兼容保留)
@@ -219,6 +220,7 @@ export const normalizePartnerFields = (fields?: PartnerItemFields): PartnerItemF
     'relationships',
     'speakingStyle',
     'typicalReactions',
+    'personaDescription',
     'relationMemory',
     'userRelationType',
     'userInteractionModel',

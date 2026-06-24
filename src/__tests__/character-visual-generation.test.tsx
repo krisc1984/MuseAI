@@ -9,6 +9,10 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
 }));
 
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  save: vi.fn(async () => null),
+}));
+
 vi.mock('../utils/openaiImageGeneration', () => ({
   DEFAULT_IMAGE_MODEL: 'gpt-image-2',
   generateOpenAIImage: vi.fn(),

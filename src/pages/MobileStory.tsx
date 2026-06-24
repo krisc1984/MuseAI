@@ -17,6 +17,7 @@ import remarkGfm from 'remark-gfm';
 import { useStoryStore } from '../stores/useStoryStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
+import { useWorksStore } from '../stores/useWorksStore';
 import { appInvoke, listenStream } from '../utils/runtime';
 import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
 import {
@@ -64,6 +65,7 @@ const MobileStory: React.FC = () => {
   } = useStoryStore();
 
   const { characterCards, worldBooks } = usePartnerStore();
+  const selectedWorkFile = useWorksStore((state) => state.selectedFile);
   const settings = useSettingsStore();
 
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
@@ -126,6 +128,7 @@ const MobileStory: React.FC = () => {
         savedAt: Date.now(),
         selectedReferenceFiles: [],
         selectedOutlineFile: null,
+        selectedWorkFile,
         todos: [],
         contextCompaction: null,
         isArchived: isSessionArchived,
@@ -552,6 +555,27 @@ const MobileStory: React.FC = () => {
       }
     } catch (e) {
       message.error(`封存记忆归档失败: ${e}`);
+    }
+  };
+
+  const handleExportStoryArchive = async () => {
+    if (messages.length === 0) {
+      message.warning('当前还没有可导出的剧情内容');
+      return;
+    }
+
+    try {
+      const result = await appInvoke<string | { path?: string }>('export_story_session_markdown', {
+        sessionId,
+        title: sessionTitle,
+      });
+      const path = typeof result === 'string' ? result : result?.path;
+      if (!path) {
+        throw new Error('未返回导出路径');
+      }
+      message.success(`剧情存档已导出：${path}`);
+    } catch (e) {
+      message.error(`导出剧情存档失败: ${e}`);
     }
   };
 
@@ -1004,14 +1028,24 @@ const MobileStory: React.FC = () => {
 
               {/* Archive triggers */}
               {messages.length > 0 && !isSessionArchived && !isStreaming && (
-                <Button
-                  type="link"
-                  icon={<SaveOutlined />}
-                  onClick={handleStartArchive}
-                  style={{ color: '#d97757', padding: 0, fontSize: '13px', alignSelf: 'flex-end' }}
-                >
-                  提炼记忆并锁定存档
-                </Button>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', flexWrap: 'wrap' }}>
+                  <Button
+                    type="link"
+                    icon={<SaveOutlined />}
+                    onClick={handleExportStoryArchive}
+                    style={{ color: '#d97757', padding: 0, fontSize: '13px' }}
+                  >
+                    导出剧情存档
+                  </Button>
+                  <Button
+                    type="link"
+                    icon={<HistoryOutlined />}
+                    onClick={handleStartArchive}
+                    style={{ color: '#d97757', padding: 0, fontSize: '13px' }}
+                  >
+                    提炼记忆并锁定存档
+                  </Button>
+                </div>
               )}
               {isSessionArchived && (
                 <div style={{ fontSize: '11px', color: '#8c8880', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '4px', alignItems: 'center' }}>
